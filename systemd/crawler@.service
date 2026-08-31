@@ -1,0 +1,15 @@
+[Unit]
+Description=Crawler %i
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/crawlers
+ExecStart=%h/projects/crawlers/.venv/bin/python -m crawlers.%i.main
+Restart=on-failure
+RestartSec=30
+Nice=10
+MemoryMax=3G
+
+[Install]
+WantedBy=default.target

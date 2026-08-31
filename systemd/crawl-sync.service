@@ -1,0 +1,6 @@
+[Unit]
+Description=Sync crawl output to Spaces
+
+[Service]
+Type=oneshot
+ExecStart=%h/projects/crawlers/sync.sh
