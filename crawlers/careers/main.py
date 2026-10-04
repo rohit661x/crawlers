@@ -3,8 +3,13 @@ about new jobs that pass the filters. One-shot; scheduled by systemd/poll@career
 
 Run:  python -m crawlers.careers.main [--dry-run] [--only NAME ...] [--config PATH] [--db PATH]
 --dry-run prints messages instead of sending and uses an in-memory DB unless --db is given.
+
+Reliability (config [http] / [alerts]): per-host pacing + retry/backoff (fetchers.base.RetryClient),
+a per-company timeout, one retry for browser fetchers, a run lock, and guards against
+broken fetchers: a sharply shrunk listing pauses closures, a burst of "new" jobs (ids changed)
+is absorbed as a re-baseline, and state changes (failing / empty / shrunk / recovered) alert once.
 """
-import argparse, asyncio, logging, os, tomllib
+import argparse, asyncio, fcntl, logging, os, sys, tomllib
 from contextlib import AsyncExitStack
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -14,6 +19,7 @@ from common import config
 from common.browser import browser_context
 from common.output import JsonlSink, setup_logging
 from .fetchers import HTTP_FETCHERS, BROWSER_FETCHERS
+from .fetchers.base import RetryClient
 from .filters import build_filters
 from .store import Store
 from . import health, notify
@@ -26,29 +32,47 @@ DEFAULT_DB = Path(os.getenv("CAREERS_DB", str(Path.home() / "data" / "state" / "
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 BASELINE_PREVIEW = 5  # matching jobs to show when a company is first tracked
 
-async def fetch_all(companies: list[dict], concurrency: int) -> list[tuple[dict, object]]:
-    """Returns [(company_cfg, FetchResult | Exception)]; one company failing never stops the rest."""
-    sem = asyncio.Semaphore(concurrency)
+async def fetch_all(companies: list[dict], cfg: dict) -> tuple[list[tuple[dict, object]], int]:
+    """Returns ([(company_cfg, FetchResult | Exception)], http_retries).
+    One company failing or hanging never stops the rest."""
+    http_cfg = cfg.get("http", {})
+    sem = asyncio.Semaphore(cfg.get("concurrency", 4))
+    timeout = http_cfg.get("company_timeout", 300)
     async with AsyncExitStack() as stack:
-        client = await stack.enter_async_context(httpx.AsyncClient(
+        raw = await stack.enter_async_context(httpx.AsyncClient(
             timeout=30, follow_redirects=True, headers={"User-Agent": UA, "Accept": "application/json"}))
+        client = RetryClient(raw, **http_cfg)
         ctx, browser_lock = None, asyncio.Lock()  # one page at a time keeps chromium memory flat
         if any(co["ats"] in BROWSER_FETCHERS for co in companies):
             ctx = await stack.enter_async_context(browser_context())
+
+        async def browser_fetch(co):
+            for attempt in (1, 2):  # no HTTP-level retry here, so retry the whole page once
+                try:
+                    return await BROWSER_FETCHERS[co["ats"]](ctx, co)
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    log.info("retry %s (browser) after: %s", co["name"], short_error(e))
+                    await asyncio.sleep(10)
 
         async def one(co):
             try:
                 if co["ats"] in HTTP_FETCHERS:
                     async with sem:
-                        return co, await HTTP_FETCHERS[co["ats"]](client, co)
+                        return co, await asyncio.wait_for(HTTP_FETCHERS[co["ats"]](client, co),
+                                                          co.get("timeout", timeout))
                 if co["ats"] in BROWSER_FETCHERS:
                     async with browser_lock:
-                        return co, await BROWSER_FETCHERS[co["ats"]](ctx, co)
+                        return co, await asyncio.wait_for(browser_fetch(co), co.get("timeout", timeout))
                 raise ValueError(f"unknown ats {co['ats']!r}")
+            except asyncio.TimeoutError:
+                return co, TimeoutError(f"no result within {co.get('timeout', timeout)}s")
             except Exception as e:
                 return co, e
 
-        return await asyncio.gather(*(one(co) for co in companies))
+        results = await asyncio.gather(*(one(co) for co in companies))
+        return results, client.retried
 
 def notify_pending(store, global_filter, per_company, dry_run, now) -> int:
     pending = store.pending()
@@ -96,6 +120,32 @@ def short_error(e: Exception) -> str:
         return f"HTTP {e.response.status_code} from {e.request.url.host}"
     return f"{type(e).__name__}: {str(e)[:150]}"
 
+ALERT_TEXT = {
+    "failing": "❌ {name}: failing {fails} runs in a row: {error}",
+    "empty": "⚠️ {name}: returned 0 jobs (had {prev}); closures paused until it recovers",
+    "shrunk": "⚠️ {name}: listing shrank {prev} → {count}; closures paused until it recovers",
+}
+
+def transition(store, name: str, state: str | None, **info) -> str | None:
+    """Record a company's alert state; return a message only when it changes."""
+    prev = store.set_alert_state(name, state)
+    if state == prev:
+        return None
+    if state:
+        return ALERT_TEXT[state].format(name=name, **info)
+    return f"✅ {name}: recovered ({prev} → ok)"
+
+def acquire_lock(db_path) -> object | None:
+    """Exclusive lock so a manual run and the timer can't both send the same alerts."""
+    if str(db_path) == ":memory:":
+        return True
+    f = open(f"{db_path}.lock", "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return None
+    return f
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=str(HERE / "config.toml"))
@@ -110,39 +160,85 @@ def main():
     if args.only:
         companies = [co for co in companies if co["name"] in args.only]
     global_filter, per_company = build_filters(cfg)
-    store = Store(args.db or (":memory:" if args.dry_run else DEFAULT_DB))
+    db_path = args.db or (":memory:" if args.dry_run else DEFAULT_DB)
+    store = Store(db_path)
+    lock = acquire_lock(db_path)
+    if lock is None:
+        log.warning("another run holds %s.lock; exiting", db_path)
+        sys.exit(0)
+    acfg = cfg.get("alerts", {})
+    shrink_ratio, shrink_min = acfg.get("shrink_ratio", 0.2), acfg.get("shrink_min", 10)
+    shrink_accept = acfg.get("shrink_accept_runs", 6)
+    burst_min, burst_ratio = acfg.get("burst_min", 25), acfg.get("burst_ratio", 0.5)
+    fail_threshold = cfg.get("health", {}).get("fail_threshold", 3)
+    alerts = []
     sink = JsonlSink(NAME)
     started = datetime.now(timezone.utc)
     now = started.isoformat()
     if store.get("first_run") is None:
         store.set("first_run", now)
 
-    results = asyncio.run(fetch_all(companies, cfg.get("concurrency", 4)))
+    results, retries = asyncio.run(fetch_all(companies, cfg))
     baselines, failures, new_jobs = [], 0, 0
     for co, res in results:
+        name = co["name"]
         if isinstance(res, Exception):
             failures += 1
-            log.warning("fail %s (%s): %r", co["name"], co["ats"], res)
-            sink.write({"crawler": NAME, "event": "error", "company": co["name"], "ats": co["ats"],
-                        "error": repr(res)})
-            store.record_fail(co["name"], short_error(res), now)
+            err = short_error(res)
+            log.warning("fail %s (%s): %s", name, co["ats"], err)
+            sink.write({"crawler": NAME, "event": "error", "company": name, "ats": co["ats"], "error": repr(res)})
+            store.record_fail(name, err, now)
+            fails = store.company_status()[name]["consecutive_failures"]
+            if fails >= fail_threshold:
+                alerts.append(transition(store, name, "failing", fails=fails, error=err))
             continue
-        if not res.jobs and store.open_count(co["name"]):
-            log.warning("%s returned 0 jobs but has open jobs on record; not marking closed", co["name"])
-        ch = store.sync(co["name"], res.jobs, res.complete, now)
-        store.record_ok(co["name"], len(res.jobs), now)
+
+        # shrink guard: a fetcher that silently breaks returns far fewer jobs; don't close them
+        prev_open, count = store.open_count(name), len(res.jobs)
+        complete, state, accepted = res.complete, None, False
+        shrunk_key = f"shrunk_runs:{name}"
+        if prev_open >= shrink_min and count < prev_open * shrink_ratio:
+            runs = int(store.get(shrunk_key) or 0) + 1
+            store.set(shrunk_key, str(runs))
+            if runs < shrink_accept:
+                complete, state = False, ("empty" if count == 0 else "shrunk")
+                log.warning("%s: %d jobs vs %d open on record; closures paused (%d/%d)",
+                            name, count, prev_open, runs, shrink_accept)
+            else:
+                accepted = True
+                alerts.append(f"ℹ️ {name}: listing has stayed at {count} (was {prev_open}) for {runs} runs; "
+                              "accepting it as real and closing the rest")
+        else:
+            store.set(shrunk_key, "0")
+
+        ch = store.sync(name, res.jobs, complete, now, allow_empty=accepted)
+        store.record_ok(name, count, now)
+        if accepted:  # the ℹ️ message above already says so; no separate "recovered"
+            store.set_alert_state(name, None)
+        else:
+            alerts.append(transition(store, name, state, prev=prev_open, count=count))
+
+        # burst guard: hundreds of "new" jobs at once usually means ids changed, not a hiring spree
+        if not ch["baseline"] and len(ch["new"]) > max(burst_min, burst_ratio * prev_open):
+            store.mark([{"company": name, "job_id": j.job_id} for j in ch["new"]], "baseline", now)
+            alerts.append(f"⚠️ {name}: {len(ch['new'])} 'new' jobs at once (had {prev_open}); "
+                          "treated as a re-baseline, not alerted. Job ids may have changed.")
+            ch["new"] = []
         new_jobs += 0 if ch["baseline"] else len(ch["new"])
-        log.info("ok %s: %d jobs, %d new, %d closed%s%s", co["name"], len(res.jobs), len(ch["new"]),
+        log.info("ok %s: %d jobs, %d new, %d closed%s%s", name, count, len(ch["new"]),
                  len(ch["closed"]), " (baseline)" if ch["baseline"] else "",
-                 "" if res.complete else " (listing incomplete; closures skipped)")
+                 "" if complete else " (listing incomplete; closures skipped)")
         if ch["baseline"]:
             baselines.append((co, res.jobs))
         else:
             for j in ch["new"]:
                 sink.write({"crawler": NAME, "event": "new", **asdict(j)})
         for job_id in ch["closed"]:
-            sink.write({"crawler": NAME, "event": "closed", "company": co["name"], "job_id": job_id})
+            sink.write({"crawler": NAME, "event": "closed", "company": name, "job_id": job_id})
 
+    alerts = [a for a in alerts if a]
+    for _, msg in notify.chunk("🚨 Poller alerts", [(None, a) for a in alerts]):
+        print(msg, end="\n\n") if args.dry_run else notify.send(msg)
     if baselines:
         notify_baselines(baselines, global_filter, per_company, args.dry_run)
     sent = notify_pending(store, global_filter, per_company, args.dry_run, now)
@@ -150,7 +246,8 @@ def main():
     finished = datetime.now(timezone.utc)
     if not args.only:  # partial runs would skew the health stats
         store.record_run(now, finished.isoformat(), len(companies), failures, new_jobs, sent)
-    log.info("done: %d companies, %d failed, %d notified", len(companies), failures, sent)
+    log.info("done: %d companies, %d failed, %d notified, %d http retries, %d alerts",
+             len(companies), failures, sent, retries, len(alerts))
 
     health_cfg = cfg.get("health", {})
     if args.health or (not args.only and not args.dry_run and health.due(store, health_cfg, finished)):

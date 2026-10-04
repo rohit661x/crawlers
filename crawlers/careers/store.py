@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS company_status (
     last_error_at TEXT,
     last_error  TEXT,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
-    failing_since TEXT
+    failing_since TEXT,
+    alert_state TEXT      -- NULL = fine; 'failing' | 'empty' | 'shrunk' once alerted
 );
 CREATE TABLE IF NOT EXISTS runs (
     started_at  TEXT PRIMARY KEY,
@@ -54,13 +55,19 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
 
-    def sync(self, company: str, jobs: list[Job], complete: bool, now: str) -> dict:
+    def _migrate(self):
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(company_status)")}
+        if "alert_state" not in cols:
+            self.db.execute("ALTER TABLE company_status ADD COLUMN alert_state TEXT")
+
+    def sync(self, company: str, jobs: list[Job], complete: bool, now: str, allow_empty: bool = False) -> dict:
         """Upsert one company's current listing. Returns {baseline, new, reopened, closed}.
 
         The first time a company is seen, its jobs are stored as 'baseline' so we don't
         announce hundreds of existing postings. Jobs absent from a complete, non-empty
-        listing are marked closed.
+        listing are marked closed (an empty listing only closes with allow_empty).
         """
         existing = {r["job_id"]: r["closed_at"] for r in self.db.execute(
             "SELECT job_id, closed_at FROM jobs WHERE company = ?", (company,))}
@@ -84,7 +91,7 @@ class Store:
                         " WHERE company = ? AND job_id = ?",
                         (*vals.values(), now, company, j.job_id))
             closed = []
-            if complete and jobs:
+            if complete and (jobs or allow_empty):
                 closed = [r["job_id"] for r in self.db.execute(
                     "SELECT job_id FROM jobs WHERE company = ? AND closed_at IS NULL AND last_seen < ?",
                     (company, now))]
@@ -131,6 +138,14 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO runs VALUES (?, ?, ?, ?, ?, ?)",
                             (started, finished, companies, failed, new_jobs, notified))
+
+    def set_alert_state(self, company: str, state: str | None) -> str | None:
+        """Store the new alert state; returns the previous one."""
+        row = self.db.execute("SELECT alert_state FROM company_status WHERE company = ?", (company,)).fetchone()
+        prev = row[0] if row else None
+        with self.db:
+            self.db.execute("UPDATE company_status SET alert_state = ? WHERE company = ?", (state, company))
+        return prev
 
     def company_status(self) -> dict[str, sqlite3.Row]:
         return {r["company"]: r for r in self.db.execute("SELECT * FROM company_status")}

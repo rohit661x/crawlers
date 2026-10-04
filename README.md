@@ -25,5 +25,11 @@ Add companies: `python -m crawlers.careers.discover "Stripe" "Notion" [--ats gre
 finds the ATS + slug (careers-page links, then slug guesses verified by board name) and appends confident
 matches to `config.toml`. Check the reported board name: a guessed domain can be another company.
 
+Reliability (`[http]`, `[alerts]` in config): per-host pacing + retry/backoff on 429/5xx/network errors
+(honours Retry-After), per-company timeout, run lock. Guards against broken fetchers: a listing that shrinks
+below 20% of what's on record pauses closures (accepted as real after 6 runs); a burst of "new" jobs is absorbed
+as a re-baseline. Failing / empty / shrunk / recovered each send one Telegram alert on change, and the daily
+health summary (first run after `[health].hour`) doubles as a dead-man's switch.
+
 Test without sending: `python -m crawlers.careers.main --dry-run [--only NAME]` (in-memory DB).
 Schedule: `systemctl --user enable --now poll@careers.timer` (one-shot `poll@.service`, hourly `poll@.timer`).

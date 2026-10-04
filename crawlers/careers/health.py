@@ -43,8 +43,9 @@ def build(store, companies: list[dict], cfg: dict, now: datetime) -> str:
             issues.append(f"❌ {name}: failing {st['consecutive_failures']} runs in a row "
                           f"(since {_ago(st['failing_since'], now)}; last ok {_ago(st['last_ok'], now)}): "
                           f"{st['last_error']}")
-        elif st["last_count"] == 0 and store.open_count(name):
-            issues.append(f"⚠️ {name}: last run returned 0 jobs (had {store.open_count(name)}); fetcher may be broken")
+        elif st["alert_state"] in ("empty", "shrunk"):
+            issues.append(f"⚠️ {name}: listing {st['alert_state']} ({st['last_count']} jobs vs "
+                          f"{store.open_count(name)} on record); closures paused")
         else:
             ok += 1
             if st["consecutive_failures"]:

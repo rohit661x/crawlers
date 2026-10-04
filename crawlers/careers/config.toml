@@ -2,6 +2,27 @@
 
 concurrency = 4  # simultaneous HTTP companies
 
+[http]
+min_interval = 0.25      # seconds between requests to one host (unlisted hosts)
+retries = 3              # extra attempts on 429 / 5xx / timeouts, exponential backoff (2s, 4s, 8s)
+max_wait = 90            # don't honour a Retry-After longer than this; fail and try next run
+company_timeout = 300    # whole-company fetch limit (override per company with `timeout`)
+
+[http.host_intervals]    # slower pacing for hosts that rate-limit (suffix match)
+"apply.careers.microsoft.com" = 3.0
+"myworkdayjobs.com" = 0.75
+"www.google.com" = 1.0
+"jobs.apple.com" = 1.0
+"www.amazon.jobs" = 0.5
+"api.smartrecruiters.com" = 0.5
+
+[alerts]                 # one Telegram alert per state change, not per run
+shrink_ratio = 0.2       # listing < 20% of open jobs on record => fetcher likely broken, pause closures
+shrink_min = 10          # ...only for companies with at least this many open jobs
+shrink_accept_runs = 6   # still shrunk after this many runs => accept as real
+burst_min = 25           # more "new" jobs than max(burst_min, burst_ratio * open) in one run
+burst_ratio = 0.5        # => ids probably changed; absorb silently as re-baseline
+
 [filters]
 # Level: early-career only.
 title_include = [
@@ -51,7 +72,8 @@ name = "Microsoft"
 ats = "eightfold"
 host = "apply.careers.microsoft.com"
 domain = "microsoft.com"
-searches = [{filter_seniority = "Intern"}, {filter_seniority = "Entry"}, {filter_employment_type = "internship"}]
+# "internship" employment type covers the Intern seniority tag; MS rate-limits hard, so keep requests low
+searches = [{filter_employment_type = "internship"}, {filter_seniority = "Entry"}]
 
 [[companies]]
 name = "Google"
