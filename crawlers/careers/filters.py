@@ -5,12 +5,16 @@ Config (global [filters], overridable per company with a `filters` table):
                  case-insensitive; prefix with "re:" for a raw regex. Used for level (intern, new grad).
   role_include   any match also required (empty = any role). Same syntax. Used for function.
   title_exclude  any match rejects.
-  locations      any substring match in location required (empty = anywhere).
+  regions        ["US", "CA"]: keep jobs located in the US or Canada (geo.in_us_ca). Locations that
+                 can't be placed ("Hybrid", "3 Locations", blank) are kept rather than risk a miss.
+  locations      extra substrings that also pass (e.g. a specific foreign city). Empty = no extra.
+                 With neither set, any location passes.
   remote_ok      remote jobs with no geographic restriction ("Remote", "Anywhere", blank)
                  pass the location check. Regional remote ("Remote - Canada") is
                  handled by `locations` like any other location.
 """
 import re
+from .geo import in_us_ca
 
 _UNRESTRICTED = re.compile(r"\b(remote|anywhere|worldwide|global|work from home|wfh)\b|[\s,;/()|·-]+", re.I)
 
@@ -26,6 +30,9 @@ class JobFilter:
         self.role = _compile(cfg.get("role_include", []))
         self.exclude = _compile(cfg.get("title_exclude", []))
         self.locations = [l.lower() for l in cfg.get("locations", [])]
+        self.regions = {r.upper() for r in cfg.get("regions", [])}
+        if self.regions - {"US", "CA"}:
+            raise ValueError(f"regions supports only US and CA, got {sorted(self.regions)}")
         self.remote_ok = cfg.get("remote_ok", True)
 
     def matches(self, job) -> bool:
@@ -38,10 +45,12 @@ class JobFilter:
             return False
         if self.exclude and self.exclude.search(title or ""):
             return False
-        if self.locations:
+        if self.regions or self.locations:
             loc = location.lower()
             anywhere = (bool(remote) or "remote" in loc) and not _UNRESTRICTED.sub("", loc)
-            if not (any(l in loc for l in self.locations) or (self.remote_ok and anywhere)):
+            region = in_us_ca(location) if self.regions else False
+            if not (region is True or (region is None and self.regions)
+                    or any(l in loc for l in self.locations) or (self.remote_ok and anywhere)):
                 return False
         return True
 

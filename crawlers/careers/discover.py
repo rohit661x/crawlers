@@ -133,8 +133,9 @@ async def discover(client, name: str, url: str | None = None, allowed: set | Non
 
 def config_block(c: dict) -> str:
     lines = ["", "[[companies]]", f'name = "{c["name"]}"', f'ats = "{c["ats"]}"']
-    if c["ats"] == "workday":
+    if c["ats"] == "workday":  # full Workday listings cap at 2000; search for early-career instead
         lines.append(f'url = "https://{c["slug"]}"')
+        lines.append('searches = ["intern", "new grad", "university"]')
     else:
         lines.append(f'slug = "{c["slug"]}"')
     return "\n".join(lines) + "\n"

@@ -15,6 +15,18 @@ async def get_json(client: httpx.AsyncClient, url: str, **kw):
     r.raise_for_status()
     return r.json()
 
+# Lookalike letters some sites use to defeat keyword search ("ꓟachine ꓡearning"): Lisu + Cyrillic
+_CONFUSABLES = str.maketrans({
+    "ꓐ": "B", "ꓑ": "P", "ꓓ": "D", "ꓔ": "T", "ꓖ": "G", "ꓗ": "K", "ꓙ": "J", "ꓚ": "C", "ꓜ": "Z", "ꓝ": "F",
+    "ꓟ": "M", "ꓠ": "N", "ꓡ": "L", "ꓢ": "S", "ꓣ": "R", "ꓦ": "V", "ꓧ": "H", "ꓪ": "W", "ꓫ": "X", "ꓬ": "Y",
+    "ꓮ": "A", "ꓰ": "E", "ꓲ": "I", "ꓳ": "O", "ꓴ": "U",
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T",
+    "Х": "X", "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i",
+})
+
+def deconfuse(s: str) -> str:
+    return s.translate(_CONFUSABLES)
+
 def searches(co, default=None) -> list:
     """Most fetchers accept `searches` in config: one query per entry, results unioned."""
     return co.get("searches") or [default]

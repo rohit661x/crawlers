@@ -29,14 +29,14 @@ title_include = [
   "intern", "interns", "internship", "internships", "co-op", "coop", "student", "apprentice", "apprenticeship",
   "new grad", "new graduate", "new college grad", "university grad", "university graduate", "graduate",
   "early career", "early-career", "entry level", "entry-level", "junior", "associate",
-  "fellow", "fellows", "fellowship", "residency", "resident",
+  "fellow", "fellows", "fellowship", "residency", "resident", "campus",
   're:\b(engineer|developer|scientist|analyst)\s+I\b(?!I)',   # "Software Engineer I", not II
 ]
 # Never senior, even if a level term matched (e.g. "Senior Associate", "Technical Fellow").
 # "manager"/"lead" deliberately absent: "Associate Product Manager Intern" is entry level.
 title_exclude = [
   "senior", "sr", "snr", "staff", "principal", "director", "head", "vp",
-  "vice president", "distinguished", "technical fellow", "counsel",
+  "vice president", "distinguished", "technical fellow", "counsel", "recruiter", "recruiting", "officer",
   're:\b(II|III|IV|V)\b', "experienced",
 ]
 # Function: tech roles. PLACEHOLDER, adjust to taste.
@@ -46,9 +46,10 @@ role_include = [
   "technical", "systems", "cloud", "network", "analytics", "deep learning", "computer vision", "robotics",
   "robot", "hardware", "silicon", "asic", "gpu", "soc", "rtl", "vlsi", "fpga", "embedded", "firmware",
   "verification", "validation", "physical design", "cad", "quantum", "ee", "design", "circuit",
-  "architecture", "architect", "ic", "analog", "mixed signal", "test",
+  "architecture", "architect", "ic", "analog", "mixed signal", "test", "quantitative", "trader", "trading",
 ]
-locations = []   # anywhere, for the test. e.g. ["Canada", "Toronto", "Remote"]
+regions = ["US", "CA"]   # US + Canada (see geo.py); unplaceable locations ("Hybrid", "3 Locations") pass
+locations = []           # extra substrings that also pass, e.g. ["London"]
 remote_ok = true
 
 [health]
@@ -61,6 +62,7 @@ expected_runs = 20   # hourly timer; fewer runs in 24h is flagged
 #   workday      url = careers page; searches = ["text", ...]
 #   amazon       searches = ["base_query", ...]
 #   eightfold    host, domain; searches = [{param = value}, ...]
+#   janestreet   (no options; janestreet.com JSON feed)
 #   google | apple  searches = [{param = value}, ...]   (URL params of their search pages)
 #   meta         searches = ["query string", ...]
 #   custom       url, link_selector, optional title_selector / location_selector / wait_selector
@@ -468,3 +470,188 @@ slug = "sanctuary"
 name = "Notion"
 ats = "ashby"
 slug = "notion"
+
+[[companies]]
+name = "Cursor"
+ats = "ashby"
+slug = "cursor"
+
+[[companies]]
+name = "Wattpad"
+ats = "lever"
+slug = "wattpad"
+
+[[companies]]
+name = "Waabi"
+ats = "lever"
+slug = "waabi"
+
+[[companies]]
+name = "Jane Street"
+ats = "janestreet"   # own feed; its Greenhouse board only has recruiter roles
+
+[[companies]]
+name = "Jump Trading"
+ats = "greenhouse"
+slug = "jumptrading"
+
+[[companies]]
+name = "IMC Trading"
+ats = "greenhouse"
+slug = "imc"
+
+[[companies]]
+name = "Workday"
+ats = "workday"
+url = "https://workday.wd5.myworkdayjobs.com/Workday"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "Block"
+ats = "greenhouse"
+slug = "block"
+
+[[companies]]
+name = "Spotify"
+ats = "lever"
+slug = "spotify"
+
+[[companies]]
+name = "Twilio"
+ats = "greenhouse"
+slug = "twilio"
+
+[[companies]]
+name = "HubSpot"
+ats = "greenhouse"
+slug = "hubspotjobs"
+
+[[companies]]
+name = "Toast"
+ats = "greenhouse"
+slug = "toast"
+
+[[companies]]
+name = "Palo Alto Networks"
+ats = "workday"
+url = "https://paloaltonetworks.wd5.myworkdayjobs.com/en-US/panwexternalcareers"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "CrowdStrike"
+ats = "workday"
+url = "https://crowdstrike.wd5.myworkdayjobs.com/crowdstrikecareers"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "Zscaler"
+ats = "greenhouse"
+slug = "zscaler"
+
+[[companies]]
+name = "Riot Games"
+ats = "greenhouse"
+slug = "riotgames"
+
+[[companies]]
+name = "Epic Games"
+ats = "greenhouse"
+slug = "epicgames"
+
+[[companies]]
+name = "Nextdoor"
+ats = "greenhouse"
+slug = "nextdoor"
+
+[[companies]]
+name = "Quora"
+ats = "ashby"
+slug = "quora"
+
+[[companies]]
+name = "SoFi"
+ats = "greenhouse"
+slug = "sofi"
+
+[[companies]]
+name = "Cerebras"
+ats = "ashby"
+slug = "cerebras"
+
+[[companies]]
+name = "Lambda"
+ats = "ashby"
+slug = "lambda"
+
+[[companies]]
+name = "CoreWeave"
+ats = "greenhouse"
+slug = "coreweave"
+
+[[companies]]
+name = "xAI"
+ats = "greenhouse"
+slug = "xai"
+
+[[companies]]
+name = "Figure AI"
+ats = "greenhouse"
+slug = "figureai"
+
+[[companies]]
+name = "Skydio"
+ats = "ashby"
+slug = "skydio"
+
+[[companies]]
+name = "Zoox"
+ats = "lever"
+slug = "zoox"
+
+[[companies]]
+name = "Shield AI"
+ats = "lever"
+slug = "shieldai"
+
+[[companies]]
+name = "Lightspeed"
+ats = "ashby"
+slug = "lightspeedhq"
+
+[[companies]]
+name = "Thinkific"
+ats = "ashby"
+slug = "thinkific"
+
+[[companies]]
+name = "ApplyBoard"
+ats = "workday"
+url = "https://applyboard.wd3.myworkdayjobs.com/ApplyBoardNH"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "Arctic Wolf"
+ats = "workday"
+url = "https://arcticwolf.wd1.myworkdayjobs.com/External"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "Geotab"
+ats = "greenhouse"
+slug = "geotab"
+
+[[companies]]
+name = "Ritual"
+ats = "greenhouse"
+slug = "ritual"
+
+[[companies]]
+name = "TD Bank"
+ats = "workday"
+url = "https://td.wd3.myworkdayjobs.com/en-US/TD_Bank_Careers"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "CIBC"
+ats = "workday"
+url = "https://cibc.wd3.myworkdayjobs.com/campus"   # dedicated early-career board

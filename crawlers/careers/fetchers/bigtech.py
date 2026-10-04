@@ -2,7 +2,7 @@
 a list of query-param dicts (strings for amazon), results unioned, newest first."""
 import json, re
 from datetime import datetime, timezone
-from .base import Job, FetchResult, DEFAULT_MAX_JOBS, remote_hint, get_json, searches, dedup
+from .base import Job, FetchResult, DEFAULT_MAX_JOBS, remote_hint, get_json, searches, dedup, deconfuse
 
 def _ts(epoch) -> str | None:
     return datetime.fromtimestamp(epoch, timezone.utc).isoformat() if epoch else None
@@ -141,3 +141,22 @@ async def apple(client, co) -> FetchResult:
             seen += len(page)
             page_no += 1
     return FetchResult(dedup(jobs), complete)
+
+_JS_CITIES = {"NYC": "New York, NY, US", "CHI": "Chicago, IL, US", "ATX": "Austin, TX, US",
+              "LDN": "London, UK", "HKG": "Hong Kong", "SGP": "Singapore", "AMS": "Amsterdam"}
+
+async def janestreet(client, co) -> FetchResult:
+    """janestreet.com's own JSON feed (its Greenhouse board only lists recruiters). The level
+    lives in `availability`, so it's appended to the title where the filters can see it."""
+    jobs = []
+    for j in await get_json(client, "https://www.janestreet.com/jobs/main.json"):
+        title, avail = deconfuse(j["position"]).strip(), j.get("availability", "")
+        if avail and "experienced" not in avail.lower():
+            title = f"{title} ({avail})"  # "Summer Internship", "Full-Time: New Grad", "Winter Co-Op"
+        city = j.get("city", "")
+        jobs.append(Job(
+            company=co["name"], ats="janestreet", job_id=str(j["id"]), title=title,
+            url=f"https://www.janestreet.com/join-jane-street/position/{j['id']}/",
+            location=_JS_CITIES.get(city, city), department=j.get("category") or j.get("team") or "",
+        ))
+    return FetchResult(jobs)
