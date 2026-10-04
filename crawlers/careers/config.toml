@@ -1,0 +1,448 @@
+# Career poller config.
+
+concurrency = 4  # simultaneous HTTP companies
+
+[filters]
+# Level: early-career only.
+title_include = [
+  "intern", "interns", "internship", "internships", "co-op", "coop", "student", "apprentice", "apprenticeship",
+  "new grad", "new graduate", "new college grad", "university grad", "university graduate", "graduate",
+  "early career", "early-career", "entry level", "entry-level", "junior", "associate",
+  "fellow", "fellows", "fellowship", "residency", "resident",
+  're:\b(engineer|developer|scientist|analyst)\s+I\b(?!I)',   # "Software Engineer I", not II
+]
+# Never senior, even if a level term matched (e.g. "Senior Associate", "Technical Fellow").
+# "manager"/"lead" deliberately absent: "Associate Product Manager Intern" is entry level.
+title_exclude = [
+  "senior", "sr", "snr", "staff", "principal", "director", "head", "vp",
+  "vice president", "distinguished", "technical fellow", "counsel",
+  're:\b(II|III|IV|V)\b', "experienced",
+]
+# Function: tech roles. PLACEHOLDER, adjust to taste.
+role_include = [
+  "software", "engineer", "engineering", "developer", "swe", "sde", "data", "machine learning", "ml",
+  "ai", "research", "researcher", "scientist", "security", "infrastructure", "product", "quant",
+  "technical", "systems", "cloud", "network", "analytics", "deep learning", "computer vision", "robotics",
+  "robot", "hardware", "silicon", "asic", "gpu", "soc", "rtl", "vlsi", "fpga", "embedded", "firmware",
+  "verification", "validation", "physical design", "cad", "quantum", "ee", "design", "circuit",
+  "architecture", "architect", "ic", "analog", "mixed signal", "test",
+]
+locations = []   # anywhere, for the test. e.g. ["Canada", "Toronto", "Remote"]
+remote_ok = true
+
+[health]
+hour = 9             # daily summary on the first run at/after 9:00 local
+fail_threshold = 3   # consecutive failed runs before a company is flagged
+expected_runs = 20   # hourly timer; fewer runs in 24h is flagged
+
+# One [[companies]] block per company. `ats` picks the fetcher (see fetchers/__init__.py):
+#   greenhouse | lever | ashby | smartrecruiters   slug = board name
+#   workday      url = careers page; searches = ["text", ...]
+#   amazon       searches = ["base_query", ...]
+#   eightfold    host, domain; searches = [{param = value}, ...]
+#   google | apple  searches = [{param = value}, ...]   (URL params of their search pages)
+#   meta         searches = ["query string", ...]
+#   custom       url, link_selector, optional title_selector / location_selector / wait_selector
+# Optional: max_jobs (per search, default 2000), disabled = true,
+#           [companies.filters] table overriding any global filter key.
+
+[[companies]]
+name = "Microsoft"
+ats = "eightfold"
+host = "apply.careers.microsoft.com"
+domain = "microsoft.com"
+searches = [{filter_seniority = "Intern"}, {filter_seniority = "Entry"}, {filter_employment_type = "internship"}]
+
+[[companies]]
+name = "Google"
+ats = "google"
+searches = [{target_level = "INTERN_AND_APPRENTICE"}, {target_level = "EARLY"}]
+
+[[companies]]
+name = "Amazon"
+ats = "amazon"
+searches = ["intern", "entry level"]
+
+[[companies]]
+name = "Apple"
+ats = "apple"
+searches = [{team = "internships-STDNT-INTRN"}]
+
+[[companies]]
+name = "Meta"
+ats = "meta"
+searches = ["roles[0]=Internship", "q=university%20grad"]
+
+[[companies]]
+name = "NVIDIA"
+ats = "workday"
+url = "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"
+searches = ["intern", "new college grad"]
+
+[[companies]]
+name = "OpenAI"
+ats = "ashby"
+slug = "openai"
+
+[[companies]]
+name = "Anthropic"
+ats = "greenhouse"
+slug = "anthropic"
+
+[[companies]]
+name = "Cohere"
+ats = "ashby"
+slug = "cohere"
+
+[[companies]]
+name = "Shopify"
+ats = "custom"
+url = "https://www.shopify.com/careers"
+link_selector = 'a[href^="/careers/"][href*="_"]'
+title_selector = "h4"
+location_selector = ".location"
+
+[[companies]]
+name = "Stripe"
+ats = "greenhouse"
+slug = "stripe"
+
+[[companies]]
+name = "Databricks"
+ats = "greenhouse"
+slug = "databricks"
+
+[[companies]]
+name = "Figma"
+ats = "greenhouse"
+slug = "figma"
+
+[[companies]]
+name = "Robinhood"
+ats = "greenhouse"
+slug = "robinhood"
+
+[[companies]]
+name = "Coinbase"
+ats = "greenhouse"
+slug = "coinbase"
+
+[[companies]]
+name = "Airbnb"
+ats = "greenhouse"
+slug = "airbnb"
+
+[[companies]]
+name = "Discord"
+ats = "greenhouse"
+slug = "discord"
+
+[[companies]]
+name = "Dropbox"
+ats = "greenhouse"
+slug = "dropbox"
+
+[[companies]]
+name = "Pinterest"
+ats = "greenhouse"
+slug = "pinterest"
+
+[[companies]]
+name = "Reddit"
+ats = "greenhouse"
+slug = "reddit"
+
+[[companies]]
+name = "Instacart"
+ats = "greenhouse"
+slug = "instacart"
+
+[[companies]]
+name = "Lyft"
+ats = "greenhouse"
+slug = "lyft"
+
+[[companies]]
+name = "Cloudflare"
+ats = "greenhouse"
+slug = "cloudflare"
+
+[[companies]]
+name = "Datadog"
+ats = "greenhouse"
+slug = "datadog"
+
+[[companies]]
+name = "MongoDB"
+ats = "greenhouse"
+slug = "mongodb"
+
+[[companies]]
+name = "Asana"
+ats = "greenhouse"
+slug = "asana"
+
+[[companies]]
+name = "Airtable"
+ats = "greenhouse"
+slug = "airtable"
+
+[[companies]]
+name = "GitLab"
+ats = "greenhouse"
+slug = "gitlab"
+
+[[companies]]
+name = "Roblox"
+ats = "greenhouse"
+slug = "roblox"
+
+[[companies]]
+name = "Brex"
+ats = "greenhouse"
+slug = "brex"
+
+[[companies]]
+name = "Affirm"
+ats = "greenhouse"
+slug = "affirm"
+
+[[companies]]
+name = "Scale AI"
+ats = "greenhouse"
+slug = "scaleai"
+
+[[companies]]
+name = "Samsara"
+ats = "greenhouse"
+slug = "samsara"
+
+[[companies]]
+name = "Waymo"
+ats = "greenhouse"
+slug = "waymo"
+
+[[companies]]
+name = "Nuro"
+ats = "greenhouse"
+slug = "nuro"
+
+[[companies]]
+name = "Chime"
+ats = "greenhouse"
+slug = "chime"
+
+[[companies]]
+name = "Duolingo"
+ats = "greenhouse"
+slug = "duolingo"
+
+[[companies]]
+name = "Squarespace"
+ats = "greenhouse"
+slug = "squarespace"
+
+[[companies]]
+name = "Faire"
+ats = "greenhouse"
+slug = "faire"
+
+[[companies]]
+name = "Verkada"
+ats = "greenhouse"
+slug = "verkada"
+
+[[companies]]
+name = "Applied Intuition"
+ats = "ashby"
+slug = "applied"
+
+[[companies]]
+name = "Twitch"
+ats = "greenhouse"
+slug = "twitch"
+
+[[companies]]
+name = "Vercel"
+ats = "greenhouse"
+slug = "vercel"
+
+[[companies]]
+name = "Elastic"
+ats = "greenhouse"
+slug = "elastic"
+
+[[companies]]
+name = "Okta"
+ats = "greenhouse"
+slug = "okta"
+
+[[companies]]
+name = "SpaceX"
+ats = "greenhouse"
+slug = "spacex"
+
+[[companies]]
+name = "Neuralink"
+ats = "greenhouse"
+slug = "neuralink"
+
+[[companies]]
+name = "Benchling"
+ats = "ashby"
+slug = "benchling"
+
+[[companies]]
+name = "Gusto"
+ats = "greenhouse"
+slug = "gusto"
+
+[[companies]]
+name = "Plaid"
+ats = "ashby"
+slug = "plaid"
+
+[[companies]]
+name = "Flexport"
+ats = "greenhouse"
+slug = "flexport"
+
+[[companies]]
+name = "Mercury"
+ats = "greenhouse"
+slug = "mercury"
+
+[[companies]]
+name = "Ramp"
+ats = "ashby"
+slug = "ramp"
+
+[[companies]]
+name = "Perplexity"
+ats = "ashby"
+slug = "perplexity"
+
+[[companies]]
+name = "Linear"
+ats = "ashby"
+slug = "linear"
+
+[[companies]]
+name = "Replit"
+ats = "ashby"
+slug = "replit"
+
+[[companies]]
+name = "ElevenLabs"
+ats = "ashby"
+slug = "elevenlabs"
+
+[[companies]]
+name = "Harvey"
+ats = "ashby"
+slug = "harvey"
+
+[[companies]]
+name = "Runway"
+ats = "ashby"
+slug = "runway-ml"
+
+[[companies]]
+name = "Modal"
+ats = "ashby"
+slug = "modal"
+
+[[companies]]
+name = "Supabase"
+ats = "ashby"
+slug = "supabase"
+
+[[companies]]
+name = "Snowflake"
+ats = "ashby"
+slug = "snowflake"
+
+[[companies]]
+name = "Sierra"
+ats = "ashby"
+slug = "sierra"
+
+[[companies]]
+name = "Decagon"
+ats = "ashby"
+slug = "decagon"
+
+[[companies]]
+name = "Together AI"
+ats = "greenhouse"
+slug = "togetherai"
+
+[[companies]]
+name = "Pinecone"
+ats = "ashby"
+slug = "pinecone"
+
+[[companies]]
+name = "Clay"
+ats = "ashby"
+slug = "claylabs"
+
+[[companies]]
+name = "Character AI"
+ats = "ashby"
+slug = "character"
+
+[[companies]]
+name = "Cognition"
+ats = "ashby"
+slug = "cognition"
+
+[[companies]]
+name = "Hex"
+ats = "ashby"
+slug = "hex"
+
+[[companies]]
+name = "Wealthsimple"
+ats = "ashby"
+slug = "wealthsimple"
+
+[[companies]]
+name = "1Password"
+ats = "ashby"
+slug = "1password"
+
+[[companies]]
+name = "KOHO"
+ats = "ashby"
+slug = "koho"
+
+[[companies]]
+name = "Hootsuite"
+ats = "greenhouse"
+slug = "hootsuite"
+
+[[companies]]
+name = "Neo Financial"
+ats = "ashby"
+slug = "neofinancial"
+
+[[companies]]
+name = "Dapper Labs"
+ats = "ashby"
+slug = "dapper"
+
+[[companies]]
+name = "Tenstorrent"
+ats = "greenhouse"
+slug = "tenstorrent"
+
+[[companies]]
+name = "Sanctuary AI"
+ats = "ashby"
+slug = "sanctuary"
+
+[[companies]]
+name = "Notion"
+ats = "ashby"
+slug = "notion"

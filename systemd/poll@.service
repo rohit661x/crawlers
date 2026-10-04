@@ -1,0 +1,13 @@
+[Unit]
+Description=Poll crawler %i (one-shot, run by poll@%i.timer)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/crawlers
+ExecStart=%h/projects/crawlers/.venv/bin/python -m crawlers.%i.main
+# hermes lives in ~/.local/bin, which isn't on the user-manager PATH
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Nice=10
+MemoryMax=3G
+TimeoutStartSec=30min
