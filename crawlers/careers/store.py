@@ -1,5 +1,6 @@
-"""SQLite state: which jobs we've seen, when they closed, and whether we've notified."""
-import sqlite3
+"""SQLite state: which jobs we've seen, when they closed, whether we've notified, and the
+outbox of Telegram messages waiting to be delivered."""
+import json, sqlite3
 from dataclasses import asdict
 from pathlib import Path
 from .models import Job
@@ -18,7 +19,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     first_seen  TEXT NOT NULL,
     last_seen   TEXT NOT NULL,
     closed_at   TEXT,
-    -- NULL = pending, 'sent', 'filtered' (didn't match), 'baseline' (existed on first poll)
+    missed      INTEGER NOT NULL DEFAULT 0,  -- complete listings in a row the job was absent from
+    -- NULL = pending, 'queued' (in outbox), 'sent', 'filtered' (didn't match),
+    -- 'baseline' (existed on first poll), 'dropped' (outbox gave up delivering it)
     notify_state TEXT,
     notified_at  TEXT,
     PRIMARY KEY (company, job_id)
@@ -43,7 +46,18 @@ CREATE TABLE IF NOT EXISTS runs (
     notified    INTEGER
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+-- Every Telegram message goes through here, so a failed send is retried next run, not lost.
+CREATE TABLE IF NOT EXISTS outbox (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    jobs        TEXT,              -- JSON [[company, job_id], ...] marked 'sent' on delivery
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT
+);
 """
+
+CLOSE_AFTER = 3  # complete listings a job must be missing from before it counts as closed
 
 _FIELDS = ("ats", "title", "url", "location", "remote", "department", "posted_at")
 
@@ -61,13 +75,18 @@ class Store:
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(company_status)")}
         if "alert_state" not in cols:
             self.db.execute("ALTER TABLE company_status ADD COLUMN alert_state TEXT")
+        if "missed" not in {r[1] for r in self.db.execute("PRAGMA table_info(jobs)")}:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN missed INTEGER NOT NULL DEFAULT 0")
 
-    def sync(self, company: str, jobs: list[Job], complete: bool, now: str, allow_empty: bool = False) -> dict:
+    def sync(self, company: str, jobs: list[Job], complete: bool, now: str, allow_empty: bool = False,
+             close_after: int = CLOSE_AFTER) -> dict:
         """Upsert one company's current listing. Returns {baseline, new, reopened, closed}.
 
         The first time a company is seen, its jobs are stored as 'baseline' so we don't
-        announce hundreds of existing postings. Jobs absent from a complete, non-empty
-        listing are marked closed (an empty listing only closes with allow_empty).
+        announce hundreds of existing postings. A job absent from `close_after` complete,
+        non-empty listings in a row is marked closed; one flaky listing (search results
+        shifting between pages) only bumps its `missed` count, and seeing it again resets it.
+        Incomplete listings don't count either way. An empty listing only counts with allow_empty.
         """
         existing = {r["job_id"]: r["closed_at"] for r in self.db.execute(
             "SELECT job_id, closed_at FROM jobs WHERE company = ?", (company,))}
@@ -75,7 +94,8 @@ class Store:
         new, reopened = [], []
         with self.db:
             for j in jobs:
-                vals = {k: asdict(j)[k] for k in _FIELDS}
+                row = asdict(j)
+                vals = {k: row[k] for k in _FIELDS}
                 if j.job_id not in existing:
                     self.db.execute(
                         f"INSERT INTO jobs (company, job_id, {', '.join(_FIELDS)}, first_seen, last_seen, notify_state)"
@@ -87,17 +107,17 @@ class Store:
                     if existing[j.job_id] is not None:
                         reopened.append(j)
                     self.db.execute(
-                        f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in _FIELDS)}, last_seen = ?, closed_at = NULL"
-                        " WHERE company = ? AND job_id = ?",
+                        f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in _FIELDS)}, last_seen = ?, closed_at = NULL,"
+                        " missed = 0 WHERE company = ? AND job_id = ?",
                         (*vals.values(), now, company, j.job_id))
             closed = []
             if complete and (jobs or allow_empty):
+                absent = "company = ? AND closed_at IS NULL AND last_seen < ?"
+                self.db.execute(f"UPDATE jobs SET missed = missed + 1 WHERE {absent}", (company, now))
                 closed = [r["job_id"] for r in self.db.execute(
-                    "SELECT job_id FROM jobs WHERE company = ? AND closed_at IS NULL AND last_seen < ?",
-                    (company, now))]
-                self.db.execute(
-                    "UPDATE jobs SET closed_at = ? WHERE company = ? AND closed_at IS NULL AND last_seen < ?",
-                    (now, company, now))
+                    f"SELECT job_id FROM jobs WHERE {absent} AND missed >= ?", (company, now, close_after))]
+                self.db.execute(f"UPDATE jobs SET closed_at = ? WHERE {absent} AND missed >= ?",
+                                (now, company, now, close_after))
         return {"baseline": baseline, "new": new, "reopened": reopened, "closed": closed}
 
     def open_count(self, company: str) -> int:
@@ -114,6 +134,46 @@ class Store:
             self.db.executemany(
                 "UPDATE jobs SET notify_state = ?, notified_at = ? WHERE company = ? AND job_id = ?",
                 [(state, now, r["company"], r["job_id"]) for r in rows])
+
+    # --- outbox ------------------------------------------------------------------
+
+    def enqueue(self, text: str, rows=(), now: str = ""):
+        """Queue a message; its job rows move to 'queued' in the same transaction, so they
+        aren't picked up as pending again while the message waits."""
+        jobs = [[r["company"], r["job_id"]] for r in rows]
+        with self.db:
+            self.db.execute("INSERT INTO outbox (created_at, text, jobs) VALUES (?, ?, ?)",
+                            (now, text, json.dumps(jobs) if jobs else None))
+            self.db.executemany("UPDATE jobs SET notify_state = 'queued' WHERE company = ? AND job_id = ?", jobs)
+
+    def outbox(self) -> list[sqlite3.Row]:
+        """Undelivered messages; never-failed ones first, so one message that keeps failing
+        can't hold up the rest."""
+        return self.db.execute("SELECT * FROM outbox ORDER BY attempts, id").fetchall()
+
+    def _finish(self, msg, state: str, now: str) -> int:
+        jobs = json.loads(msg["jobs"]) if msg["jobs"] else []
+        with self.db:
+            self.db.execute("DELETE FROM outbox WHERE id = ?", (msg["id"],))
+            self.db.executemany(
+                "UPDATE jobs SET notify_state = ?, notified_at = ? WHERE company = ? AND job_id = ?",
+                [(state, now, c, j) for c, j in jobs])
+        return len(jobs)
+
+    def delivered(self, msg, now: str) -> int:
+        """Remove a sent message and mark its jobs 'sent'; returns how many jobs it carried."""
+        return self._finish(msg, "sent", now)
+
+    def dropped(self, msg, now: str) -> int:
+        return self._finish(msg, "dropped", now)
+
+    def send_failed(self, msg, error: str):
+        with self.db:
+            self.db.execute("UPDATE outbox SET attempts = attempts + 1, last_error = ? WHERE id = ?",
+                            (error, msg["id"]))
+
+    def oldest_undelivered(self) -> str | None:
+        return self.db.execute("SELECT MIN(created_at) FROM outbox").fetchone()[0]
 
     # --- health bookkeeping -------------------------------------------------
 

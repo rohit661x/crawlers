@@ -27,6 +27,30 @@ _CONFUSABLES = str.maketrans({
 def deconfuse(s: str) -> str:
     return s.translate(_CONFUSABLES)
 
+class RecordGuard:
+    """`with guard:` around one record's parsing. A malformed record (Workday intermittently
+    omits `title`) is counted and skipped instead of failing the company's whole listing;
+    main.py decides whether the skips make the listing too incomplete to close jobs from."""
+    ERRORS = (KeyError, TypeError, ValueError, AttributeError, IndexError)
+
+    def __init__(self):
+        self.skipped, self.first_error = 0, ""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, et, e, tb):
+        if et is None or not issubclass(et, self.ERRORS):
+            return False
+        self.skipped += 1
+        if not self.first_error:
+            self.first_error = f"{et.__name__}: {e}"[:200]
+        log.debug("skipped malformed record: %r", e)
+        return True
+
+    def result(self, jobs: list[Job], complete: bool = True) -> FetchResult:
+        return FetchResult(jobs, complete, self.skipped, self.first_error)
+
 def searches(co, default=None) -> list:
     """Most fetchers accept `searches` in config: one query per entry, results unioned."""
     return co.get("searches") or [default]

@@ -7,8 +7,31 @@ Config:
   hour = 9                 # local hour to send at (first run at/after it)
   fail_threshold = 3       # consecutive failed runs before a company is flagged
   expected_runs = 20       # fewer runs than this in 24h is flagged (timer is hourly)
+
+A poller can't report its own death, so ping() also reports every full run to an external
+dead-man switch (HEALTHCHECK_URL, e.g. a healthchecks.io check with a ~2h grace period),
+which alerts by email when the pings stop or a run reports failure.
 """
+import logging, os
 from datetime import datetime, timedelta, timezone
+import httpx
+
+log = logging.getLogger("careers.health")
+HEALTHCHECK_URL = os.getenv("HEALTHCHECK_URL", "").rstrip("/")
+
+def ping(status: str = "", body: str = "", url: str | None = None) -> bool:
+    """Ping the dead-man switch: status "" = success, "fail" = failure (healthchecks.io URL
+    convention: <url>/fail). No-op without HEALTHCHECK_URL. Never raises."""
+    url = HEALTHCHECK_URL if url is None else url
+    if not url:
+        return False
+    for attempt in range(3):
+        try:
+            httpx.post(f"{url}/{status}" if status else url, content=body[:10000].encode(), timeout=10)
+            return True
+        except httpx.HTTPError as e:
+            log.warning("healthcheck ping failed (attempt %d/3): %r", attempt + 1, e)
+    return False
 
 def _ago(iso: str | None, now: datetime) -> str:
     if not iso:

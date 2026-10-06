@@ -1,4 +1,7 @@
-"""Telegram via `hermes send` (reuses the gateway's bot token; gateway needn't be running)."""
+"""Telegram via `hermes send` (reuses the gateway's bot token; gateway needn't be running).
+
+Messages aren't sent directly: callers queue them in the store's outbox and flush() delivers
+them, so a Telegram/hermes outage delays messages instead of losing them."""
 import json, logging, os, re, shutil, subprocess, time
 from pathlib import Path
 
@@ -10,6 +13,7 @@ MAX_CHARS = 3500  # Telegram caps at 4096; leave room for hermes' markdown escap
 
 SEND_GAP_S = 1.5             # Telegram flood control: ~1 msg/s per chat
 RETRY_DELAYS_S = (5, 20)
+MAX_ATTEMPTS = 24            # runs a message may fail in before it's dropped (~1 day hourly)
 _last_send = 0.0
 
 def _send_once(text: str) -> tuple[bool, str]:
@@ -26,16 +30,37 @@ def _send_once(text: str) -> tuple[bool, str]:
         err = p.stderr or p.stdout
     return False, f"exit {p.returncode}: {str(err).strip()[:500]}"
 
-def send(text: str) -> bool:
+def send(text: str) -> str | None:
+    """Send with retries. Returns None on success, else the last error."""
     global _last_send
     for attempt, delay in enumerate((0, *RETRY_DELAYS_S)):
         time.sleep(max(delay, _last_send + SEND_GAP_S - time.monotonic(), 0))
         ok, err = _send_once(text)
         _last_send = time.monotonic()
         if ok:
-            return True
+            return None
         log.warning("hermes send failed (attempt %d/%d): %s", attempt + 1, 1 + len(RETRY_DELAYS_S), err)
-    return False
+    return err
+
+def flush(store, now: str, max_attempts: int = MAX_ATTEMPTS) -> int:
+    """Deliver queued messages. Stops at the first failure (Telegram or hermes is probably
+    down; the rest stay queued for the next run). A message that has failed in max_attempts
+    runs is dropped with an error log, so one bad message can't retry forever.
+    Returns the number of jobs delivered."""
+    sent = 0
+    for msg in store.outbox():
+        err = send(msg["text"])
+        if err is None:
+            sent += store.delivered(msg, now)
+            continue
+        if msg["attempts"] + 1 >= max_attempts:
+            n = store.dropped(msg, now)
+            log.error("dropping message %d after %d failed runs (%d jobs): %s",
+                      msg["id"], max_attempts, n, err)
+        else:
+            store.send_failed(msg, err)
+        break
+    return sent
 
 def _clean(s: str | None) -> str:
     # hermes renders the body as markdown; keep stray markup in titles from mangling it

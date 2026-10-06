@@ -1,5 +1,6 @@
 [Unit]
 Description=Sync crawl output to Spaces
+OnFailure=notify-failure@%n.service
 
 [Service]
 Type=oneshot

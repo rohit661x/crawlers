@@ -23,6 +23,8 @@ shrink_min = 10          # ...only for companies with at least this many open jo
 shrink_accept_runs = 6   # still shrunk after this many runs => accept as real
 burst_min = 25           # more "new" jobs than max(burst_min, burst_ratio * open) in one run
 burst_ratio = 0.5        # => ids probably changed; absorb silently as re-baseline
+close_after_runs = 3     # a job closes only after missing from this many complete listings in a row
+max_skip_ratio = 0.05    # > 5% of a listing's records unparseable => keep the rest, skip closures
 
 [filters]
 # Level: early-career only.

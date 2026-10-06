@@ -1,12 +1,12 @@
 """Playwright fetchers: take a browser context instead of an httpx client."""
 import asyncio
 from urllib.parse import urljoin
-from .base import Job, FetchResult, remote_hint, searches, dedup
+from .base import Job, FetchResult, RecordGuard, remote_hint, searches, dedup
 
 async def meta(ctx, co) -> FetchResult:
     """metacareers.com blocks plain HTTP; load the search page and capture the GraphQL
     response the page itself makes. searches: query strings, e.g. "roles[0]=Internship"."""
-    jobs = []
+    jobs, guard = [], RecordGuard()
     for q in searches(co, ""):
         page = await ctx.new_page()
         got: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -31,14 +31,15 @@ async def meta(ctx, co) -> FetchResult:
         finally:
             await page.close()
         for j in all_jobs:
-            locs = j.get("locations") or []
-            jobs.append(Job(
-                company=co["name"], ats="meta", job_id=str(j["id"]), title=j["title"],
-                url=f"https://www.metacareers.com/profile/job_details/{j['id']}",
-                location="; ".join(locs), remote=remote_hint(*locs),
-                department=", ".join(j.get("teams") or []),
-            ))
-    return FetchResult(dedup(jobs))
+            with guard:
+                locs = j.get("locations") or []
+                jobs.append(Job(
+                    company=co["name"], ats="meta", job_id=str(j["id"]), title=j["title"],
+                    url=f"https://www.metacareers.com/profile/job_details/{j['id']}",
+                    location="; ".join(locs), remote=remote_hint(*locs),
+                    department=", ".join(j.get("teams") or []),
+                ))
+    return guard.result(dedup(jobs))
 
 async def custom(ctx, co) -> FetchResult:
     """Self-hosted career pages: every element matching link_selector is a job link.
@@ -54,12 +55,13 @@ async def custom(ctx, co) -> FetchResult:
         })""", [co.get("title_selector"), co.get("location_selector")])
     finally:
         await page.close()
-    jobs = []
+    jobs, guard = [], RecordGuard()
     for href, title, loc in links:
-        if not href:
-            continue
-        url = urljoin(co["url"], href)
-        title, loc = " ".join((title or "").split()), " ".join((loc or "").split())
-        jobs.append(Job(company=co["name"], ats="custom", job_id=url, title=title, url=url,
-                        location=loc, remote=remote_hint(title, loc)))
-    return FetchResult(dedup(jobs))
+        with guard:
+            if not href:
+                continue
+            url = urljoin(co["url"], href)
+            title, loc = " ".join((title or "").split()), " ".join((loc or "").split())
+            jobs.append(Job(company=co["name"], ats="custom", job_id=url, title=title, url=url,
+                            location=loc, remote=remote_hint(title, loc)))
+    return guard.result(dedup(jobs))

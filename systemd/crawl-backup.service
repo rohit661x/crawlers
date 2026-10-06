@@ -1,0 +1,7 @@
+[Unit]
+Description=Back up careers.db to Spaces
+OnFailure=notify-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/projects/crawlers/backup.sh

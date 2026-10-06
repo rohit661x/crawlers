@@ -1,0 +1,8 @@
+[Unit]
+Description=Telegram alert: %i failed
+
+[Service]
+Type=oneshot
+# hermes lives in ~/.local/bin, which isn't on the user-manager PATH
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/projects/crawlers/notify-failure.sh %i

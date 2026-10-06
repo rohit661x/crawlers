@@ -18,3 +18,5 @@ class FetchResult:
     jobs: list[Job] = field(default_factory=list)
     # False when we stopped early (max_jobs cap), so missing jobs must not be marked closed.
     complete: bool = True
+    skipped: int = 0          # records that failed to parse (see fetchers.base.RecordGuard)
+    skip_error: str = ""      # the first such error, for logs/alerts
