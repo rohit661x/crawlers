@@ -41,7 +41,9 @@ async def amazon(client, co) -> FetchResult:
 
 async def eightfold(client, co) -> FetchResult:
     """Eightfold PCSX (Microsoft and others). host + domain from config;
-    searches: param dicts, e.g. {filter_seniority = "Intern"}."""
+    searches: param dicts, e.g. {filter_seniority = "Intern"}. `api = "v2"` for older tenants (Netflix)."""
+    if co.get("api") == "v2":
+        return await _eightfold_v2(client, co)
     host, domain = co.get("host", "apply.careers.microsoft.com"), co.get("domain", "microsoft.com")
     cap = co.get("max_jobs", DEFAULT_MAX_JOBS)
     jobs, complete = [], True
@@ -65,6 +67,35 @@ async def eightfold(client, co) -> FetchResult:
                     title=j["name"], url=f"https://{host}{j['positionUrl']}", location="; ".join(locs),
                     remote=True if "remote" in wl else False if wl == "onsite" else remote_hint(*locs),
                     department=j.get("department") or "", posted_at=_ts(j.get("postedTs")),
+                ))
+            start += len(page)
+    return FetchResult(dedup(jobs), complete)
+
+async def _eightfold_v2(client, co) -> FetchResult:
+    """Pre-PCSX Eightfold: /api/apply/v2/jobs, fixed 10 per page."""
+    host, domain = co["host"], co["domain"]
+    cap = co.get("max_jobs", DEFAULT_MAX_JOBS)
+    jobs, complete = [], True
+    for params in searches(co, {}):
+        start, total = 0, None
+        while total is None or start < total:
+            if start >= cap:
+                complete = False
+                break
+            d = await get_json(client, f"https://{host}/api/apply/v2/jobs", params={
+                "domain": domain, "start": start, "num": 10, "sort_by": "timestamp", **params})
+            total, page = d.get("count", 0), d.get("positions") or []
+            if not page:
+                break
+            for j in page:
+                locs = j.get("locations") or [j.get("location") or ""]
+                wl = (j.get("work_location_option") or "").lower()
+                jobs.append(Job(
+                    company=co["name"], ats="eightfold", job_id=str(j.get("display_job_id") or j["id"]),
+                    title=j["name"], url=j.get("canonicalPositionUrl") or f"https://{host}/careers/job/{j['id']}",
+                    location="; ".join(locs),
+                    remote=True if "remote" in wl else False if wl == "onsite" else remote_hint(*locs),
+                    department=j.get("department") or "", posted_at=_ts(j.get("t_create")),
                 ))
             start += len(page)
     return FetchResult(dedup(jobs), complete)

@@ -11,6 +11,7 @@ company_timeout = 300    # whole-company fetch limit (override per company with 
 [http.host_intervals]    # slower pacing for hosts that rate-limit (suffix match)
 "apply.careers.microsoft.com" = 3.0
 "myworkdayjobs.com" = 0.75
+"myworkdaysite.com" = 0.75
 "www.google.com" = 1.0
 "jobs.apple.com" = 1.0
 "www.amazon.jobs" = 0.5
@@ -61,7 +62,7 @@ expected_runs = 20   # hourly timer; fewer runs in 24h is flagged
 #   greenhouse | lever | ashby | smartrecruiters | workable   slug = board name
 #   workday      url = careers page; searches = ["text", ...]
 #   amazon       searches = ["base_query", ...]
-#   eightfold    host, domain; searches = [{param = value}, ...]
+#   eightfold    host, domain; searches = [{param = value}, ...]; api = "v2" for older tenants
 #   janestreet   (no options; janestreet.com JSON feed)
 #   google | apple  searches = [{param = value}, ...]   (URL params of their search pages)
 #   meta         searches = ["query string", ...]
@@ -660,3 +661,66 @@ url = "https://cibc.wd3.myworkdayjobs.com/campus"   # dedicated early-career boa
 name = "Hugging Face"
 ats = "workable"
 slug = "huggingface"
+
+[[companies]]
+name = "Hudson River Trading"
+ats = "greenhouse"
+slug = "wehrtyou"
+
+[[companies]]
+name = "Five Rings"
+ats = "greenhouse"
+slug = "fiveringsllc"
+
+[[companies]]
+name = "Optiver"
+ats = "greenhouse"
+slug = "optiverus"
+
+[[companies]]
+name = "DRW"
+ats = "greenhouse"
+slug = "drweng"
+
+[[companies]]
+name = "Tower Research Capital"
+ats = "greenhouse"
+slug = "towerresearchcapital"
+
+[[companies]]
+name = "Aquatic Capital Management"
+ats = "greenhouse"
+slug = "aquaticcapitalmanagement"
+
+[[companies]]
+name = "Akuna Capital"
+ats = "greenhouse"
+slug = "akunacapital"
+
+[[companies]]
+name = "Virtu Financial"
+ats = "greenhouse"
+slug = "virtu"
+
+[[companies]]
+name = "DoorDash"
+ats = "greenhouse"
+slug = "doordashusa"
+
+[[companies]]
+name = "Palantir"
+ats = "lever"
+slug = "palantir"
+
+[[companies]]
+name = "Netflix"
+ats = "eightfold"
+api = "v2"
+host = "explore.jobs.netflix.net"
+domain = "netflix.com"
+
+[[companies]]
+name = "Snap"
+ats = "workday"
+url = "https://wd1.myworkdaysite.com/recruiting/snapchat/snap"
+searches = ["intern", "new grad", "university"]

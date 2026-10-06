@@ -94,10 +94,16 @@ _WD_REQ = re.compile(r"_([A-Za-z0-9-]+)$")
 
 async def workday(client, co) -> FetchResult:
     """url: the public careers page, e.g. https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite
+    or https://wd1.myworkdaysite.com/recruiting/snapchat/snap (tenant in the path, not the host).
     searches: list of search strings (default: everything)."""
     u = urlparse(co["url"])
-    tenant = u.hostname.split(".")[0]
-    site = [p for p in u.path.split("/") if p and not _LOCALE.match(p)][-1]
+    parts = [p for p in u.path.split("/") if p and not _LOCALE.match(p)]
+    if parts[0] == "recruiting":
+        tenant, site = parts[1], parts[2]
+        base = f"https://{u.hostname}/recruiting/{tenant}/{site}"
+    else:
+        tenant, site = u.hostname.split(".")[0], parts[-1]
+        base = f"https://{u.hostname}/{site}"
     endpoint = f"https://{u.hostname}/wday/cxs/{tenant}/{site}/jobs"
     cap = co.get("max_jobs", DEFAULT_MAX_JOBS)
     jobs, complete = [], True
@@ -122,7 +128,7 @@ async def workday(client, co) -> FetchResult:
                 loc = j.get("locationsText", "")
                 jobs.append(Job(
                     company=co["name"], ats="workday", job_id=m.group(1) if m else path, title=j["title"],
-                    url=f"https://{u.hostname}/{site}{path}", location=loc,
+                    url=f"{base}{path}", location=loc,
                     remote=True if "remote" in (j.get("remoteType") or "").lower() else _remote_hint(loc),
                 ))
             offset += len(page)
