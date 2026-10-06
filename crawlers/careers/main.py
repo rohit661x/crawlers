@@ -26,7 +26,7 @@ from .fetchers.base import RetryClient
 from .models import FetchResult
 from .filters import build_filters
 from .store import Store
-from . import health, notify
+from . import digest, health, notify
 
 NAME = "careers"
 log = setup_logging(NAME)
@@ -34,7 +34,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 HERE = Path(__file__).resolve().parent
 DEFAULT_DB = Path(os.getenv("CAREERS_DB", str(Path.home() / "data" / "state" / "careers.db")))
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-BASELINE_PREVIEW = 5  # matching jobs to show when a company is first tracked
 STUCK_OUTBOX_HOURS = 3  # undelivered messages older than this => report the run as failed
 
 async def fetch_all(companies: list[dict], cfg: dict) -> tuple[list[tuple[dict, object]], int]:
@@ -79,13 +78,6 @@ async def fetch_all(companies: list[dict], cfg: dict) -> tuple[list[tuple[dict, 
         results = await asyncio.gather(*(one(co) for co in companies))
         return results, client.retried
 
-def post(store, text: str, rows=(), *, dry_run: bool, now: str):
-    """Queue a message in the outbox (dry run: print it, queue nothing)."""
-    if dry_run:
-        print(text, end="\n\n")
-    else:
-        store.enqueue(text, rows, now)
-
 def notify_pending(store, global_filter, per_company, dry_run, now) -> int:
     """Queue messages for pending jobs that match; returns how many jobs were queued."""
     pending = store.pending()
@@ -96,31 +88,8 @@ def notify_pending(store, global_filter, per_company, dry_run, now) -> int:
     n = len(matched)
     for rows, msg in notify.chunk(f"🆕 {n} new job{'s' * (n != 1)}",
                                   [(r, notify.format_job(r)) for r in matched]):
-        post(store, msg, rows, dry_run=dry_run, now=now)
+        notify.post(store, msg, rows, dry_run=dry_run, now=now)
     return n
-
-def notify_baselines(store, baselines, global_filter, per_company, dry_run, now):
-    # many companies at once (bulk add) -> compact: one line each, fewer preview jobs
-    compact = len(baselines) > 5
-    preview = 3 if compact else BASELINE_PREVIEW
-    items = []
-    for co, jobs in baselines:
-        f = per_company.get(co["name"], global_filter)
-        hits = [asdict(j) for j in jobs if f.matches(j)]
-        text = f"👀 Now tracking {co['name']} ({co['ats']}): {len(jobs)} open, {len(hits)} match your filters"
-        if hits:
-            text += "\n\n" + "\n\n".join(notify.format_job(h) for h in hits[:preview])
-            if len(hits) > preview:
-                text += f"\n\n…and {len(hits) - preview} more"
-        items.append((len(hits), co, text))
-    if compact:
-        quiet = sorted(c["name"] for n, c, _ in items if n == 0)
-        items = [(n, c, t) for n, c, t in sorted(items, key=lambda x: -x[0]) if n]
-        if quiet:
-            items.append((0, None, f"No current matches ({len(quiet)}): " + ", ".join(quiet)))
-    header = f"📋 Now tracking {len(baselines)} new compan{'ies' if len(baselines) != 1 else 'y'}"
-    for _, msg in notify.chunk(header, [(c, t) for _, c, t in items]):
-        post(store, msg, dry_run=dry_run, now=now)
 
 def short_error(e: Exception) -> str:
     if isinstance(e, httpx.HTTPStatusError):
@@ -277,9 +246,13 @@ def run(args):
 
     alerts = [a for a in alerts if a]
     for _, msg in notify.chunk("🚨 Poller alerts", [(None, a) for a in alerts]):
-        post(store, msg, dry_run=args.dry_run, now=now)
+        notify.post(store, msg, dry_run=args.dry_run, now=now)
+    dcfg = cfg.get("digest", {})
     if baselines:
-        notify_baselines(store, baselines, global_filter, per_company, args.dry_run, now)
+        digest.baselines(store, baselines, global_filter, per_company,
+                         cap=dcfg.get("baseline_max", 50), dry_run=args.dry_run, now=now)
+    digest.refilter(store, cfg, global_filter, per_company,
+                    cap=dcfg.get("refilter_max", 100), dry_run=args.dry_run, now=now)
     queued = notify_pending(store, global_filter, per_company, args.dry_run, now)
     sent = queued if args.dry_run else notify.flush(store, now)
     sink.close()
@@ -291,7 +264,7 @@ def run(args):
 
     health_cfg = cfg.get("health", {})
     if args.health or (not args.only and not args.dry_run and health.due(store, health_cfg, finished)):
-        post(store, health.build(store, companies, health_cfg, finished), dry_run=args.dry_run, now=now)
+        notify.post(store, health.build(store, companies, health_cfg, finished), dry_run=args.dry_run, now=now)
         if not args.dry_run:
             health.mark_sent(store, finished)  # queued; the outbox delivers it, now or next run
             notify.flush(store, now)

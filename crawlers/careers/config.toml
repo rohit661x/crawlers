@@ -55,6 +55,10 @@ regions = ["US", "CA"]   # US + Canada (see geo.py); unplaceable locations ("Hyb
 locations = []           # extra substrings that also pass, e.g. ["London"]
 remote_ok = true
 
+[digest]
+baseline_max = 50    # matching jobs sent per newly tracked company (the rest: report.py --company)
+refilter_max = 100   # after you edit [filters], open jobs that newly match are sent, up to this many
+
 [health]
 hour = 9             # daily summary on the first run at/after 9:00 local
 fail_threshold = 3   # consecutive failed runs before a company is flagged

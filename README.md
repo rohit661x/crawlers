@@ -21,6 +21,11 @@ Polls company job boards hourly and pings Telegram (via `hermes send`) about new
                  A company's first poll is a silent baseline plus one "now tracking" summary.
 - events (`new`, `closed`, `error`) also go to `~/data/crawls/careers/<day>.jsonl`
 
+Matching jobs you haven't seen: `python -m crawlers.careers.report [--company NAME] [--days N] [--unsent] [--send]`
+lists every open job that passes the filters (`--send` queues them to Telegram). A newly tracked company's
+announcement includes all its matching jobs (up to `[digest].baseline_max`), and after you edit `[filters]`
+the next run sends open jobs that match the new filters but didn't match the old ones (`refilter_max`).
+
 Add companies: `python -m crawlers.careers.discover "Stripe" "Notion" [--ats greenhouse,ashby] [--add]`
 finds the ATS + slug (careers-page links, then slug guesses verified by board name) and appends confident
 matches to `config.toml`. Check the reported board name: a guessed domain can be another company.

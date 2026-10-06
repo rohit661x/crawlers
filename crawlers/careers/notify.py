@@ -42,6 +42,14 @@ def send(text: str) -> str | None:
         log.warning("hermes send failed (attempt %d/%d): %s", attempt + 1, 1 + len(RETRY_DELAYS_S), err)
     return err
 
+def post(store, text: str, rows=(), *, dry_run: bool, now: str):
+    """Queue a message in the outbox (dry run: print it, queue nothing). `rows` are the jobs it
+    carries (None entries, e.g. header lines from chunk(), are ignored)."""
+    if dry_run:
+        print(text, end="\n\n")
+    else:
+        store.enqueue(text, [r for r in rows if r is not None], now)
+
 def flush(store, now: str, max_attempts: int = MAX_ATTEMPTS) -> int:
     """Deliver queued messages. Stops at the first failure (Telegram or hermes is probably
     down; the rest stay queued for the next run). A message that has failed in max_attempts

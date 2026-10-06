@@ -1,7 +1,7 @@
 """Run-level decisions: parse verdicts, alert delivery and the dead-man heartbeat."""
 from datetime import datetime, timedelta, timezone
 import pytest
-from crawlers.careers import health, main as poller
+from crawlers.careers import health, notify, main as poller
 from crawlers.careers.models import FetchResult
 from conftest import job
 
@@ -24,7 +24,7 @@ def test_parse_verdict_all_bad_is_a_failure():
 def test_alerts_go_through_outbox(store):
     # transition() records the new state at once; the message must not be lost if sending fails
     msg = poller.transition(store, "Acme", "failing", fails=3, error="HTTP 500")
-    poller.post(store, msg, dry_run=False, now="t")
+    notify.post(store, msg, dry_run=False, now="t")
     assert [m["text"] for m in store.outbox()] == [msg]
 
 @pytest.fixture

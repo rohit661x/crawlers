@@ -124,6 +124,24 @@ class Store:
         return self.db.execute("SELECT COUNT(*) FROM jobs WHERE company = ? AND closed_at IS NULL",
                                (company,)).fetchone()[0]
 
+    def open_jobs(self, companies=None, since: str | None = None, states=None,
+                  unsent: bool = False) -> list[sqlite3.Row]:
+        """Open jobs, newest first per company. states: only these notify_states;
+        unsent: skip jobs already delivered or queued."""
+        q, args = "SELECT * FROM jobs WHERE closed_at IS NULL", []
+        if companies:
+            q += f" AND company IN ({', '.join('?' * len(companies))})"
+            args += list(companies)
+        if since:
+            q += " AND first_seen >= ?"
+            args.append(since)
+        if states:
+            q += f" AND notify_state IN ({', '.join('?' * len(states))})"
+            args += list(states)
+        if unsent:
+            q += " AND COALESCE(notify_state, '') NOT IN ('sent', 'queued')"
+        return self.db.execute(q + " ORDER BY company, first_seen DESC", args).fetchall()
+
     def pending(self) -> list[sqlite3.Row]:
         return self.db.execute(
             "SELECT * FROM jobs WHERE notify_state IS NULL AND closed_at IS NULL"
