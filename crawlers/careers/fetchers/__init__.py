@@ -1,6 +1,6 @@
 """Fetcher registry: config `ats` value -> fetcher. HTTP fetchers take an httpx client,
 browser fetchers a Playwright context. Each returns a FetchResult of normalized Jobs."""
-from .ats import greenhouse, lever, ashby, smartrecruiters, workday
+from .ats import greenhouse, lever, ashby, smartrecruiters, workday, workable
 from .bigtech import amazon, eightfold, google, apple, janestreet
 from .browser import meta, custom
 
@@ -10,6 +10,7 @@ HTTP_FETCHERS = {
     "ashby": ashby,
     "smartrecruiters": smartrecruiters,
     "workday": workday,
+    "workable": workable,
     "amazon": amazon,
     "eightfold": eightfold,
     "google": google,

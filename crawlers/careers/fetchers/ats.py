@@ -129,3 +129,28 @@ async def workday(client, co) -> FetchResult:
         # at the ceiling the listing is likely cut off; narrow it with `searches` in config
         complete = complete and (total or 0) < WORKDAY_TOTAL_CEILING
     return FetchResult(dedup(jobs), complete)
+
+_WORKABLE_LEVELS = {"internship": "Internship", "entry level": "Entry level"}
+
+async def workable(client, co) -> FetchResult:
+    """Workable's v1 widget feed: every job in one request. (The v3 search API rate-limits
+    hard, Retry-After of a day.) Early-career `experience` is appended to the title."""
+    data = await _get_json(client, f"https://apply.workable.com/api/v1/widget/accounts/{co['slug']}")
+    jobs = []
+    for j in data.get("jobs", []):
+        locs = j.get("locations") or [{"city": j.get("city"), "region": j.get("state"),
+                                       "countryCode": j.get("country")}]
+        where = ["; ".join(filter(None, [", ".join(filter(None, (l.get("city"), l.get("region"),
+                                                                l.get("countryCode") or l.get("country"))))
+                                         for l in locs]))]
+        title = j["title"]
+        level = _WORKABLE_LEVELS.get((j.get("experience") or "").lower())
+        if level and level.lower() not in title.lower():
+            title = f"{title} ({level})"
+        jobs.append(Job(
+            company=co["name"], ats="workable", job_id=j["shortcode"], title=title,
+            url=j.get("url") or f"https://apply.workable.com/j/{j['shortcode']}", location=where[0],
+            remote=True if j.get("telecommuting") else _remote_hint(where[0]),
+            department=j.get("department") or "", posted_at=j.get("published_on"),
+        ))
+    return FetchResult(jobs)

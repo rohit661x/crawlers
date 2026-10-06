@@ -58,7 +58,7 @@ fail_threshold = 3   # consecutive failed runs before a company is flagged
 expected_runs = 20   # hourly timer; fewer runs in 24h is flagged
 
 # One [[companies]] block per company. `ats` picks the fetcher (see fetchers/__init__.py):
-#   greenhouse | lever | ashby | smartrecruiters   slug = board name
+#   greenhouse | lever | ashby | smartrecruiters | workable   slug = board name
 #   workday      url = careers page; searches = ["text", ...]
 #   amazon       searches = ["base_query", ...]
 #   eightfold    host, domain; searches = [{param = value}, ...]
@@ -655,3 +655,8 @@ searches = ["intern", "new grad", "university"]
 name = "CIBC"
 ats = "workday"
 url = "https://cibc.wd3.myworkdayjobs.com/campus"   # dedicated early-career board
+
+[[companies]]
+name = "Hugging Face"
+ats = "workable"
+slug = "huggingface"
