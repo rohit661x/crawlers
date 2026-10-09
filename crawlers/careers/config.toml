@@ -50,6 +50,9 @@ role_include = [
   "robot", "hardware", "silicon", "asic", "gpu", "soc", "rtl", "vlsi", "fpga", "embedded", "firmware",
   "verification", "validation", "physical design", "cad", "quantum", "ee", "design", "circuit",
   "architecture", "architect", "ic", "analog", "mixed signal", "test", "quantitative", "trader", "trading",
+  "science", "backend", "back end", "frontend", "front end", "full stack", "full-stack", "fullstack",
+  "mobile", "ios", "android", "devops", "sre", "site reliability", "compiler", "middleware", "perception",
+  "autonomy", "programmer", "programming", "electrical",
 ]
 regions = ["US", "CA"]   # US + Canada (see geo.py); unplaceable locations ("Hybrid", "3 Locations") pass
 locations = []           # extra substrings that also pass, e.g. ["London"]
@@ -66,6 +69,7 @@ expected_runs = 20   # hourly timer; fewer runs in 24h is flagged
 
 # One [[companies]] block per company. `ats` picks the fetcher (see fetchers/__init__.py):
 #   greenhouse | lever | ashby | smartrecruiters | workable   slug = board name
+#                (greenhouse: content = true also fetches departments, ~12x the bytes)
 #   workday      url = careers page; searches = ["text", ...]
 #   amazon       searches = ["base_query", ...]
 #   eightfold    host, domain; searches = [{param = value}, ...]; api = "v2" for older tenants
@@ -730,3 +734,50 @@ name = "Snap"
 ats = "workday"
 url = "https://wd1.myworkdaysite.com/recruiting/snapchat/snap"
 searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "Anduril"
+ats = "greenhouse"
+slug = "andurilindustries"
+
+[[companies]]
+name = "Etched"
+ats = "ashby"
+slug = "etched"
+
+[[companies]]
+name = "Point72"
+ats = "greenhouse"
+slug = "point72"
+
+[[companies]]
+name = "Qualcomm"
+ats = "eightfold"
+host = "careers.qualcomm.com"
+domain = "qualcomm.com"
+searches = [{filter_seniority = "Intern"}, {filter_seniority = "Entry"}]
+
+[[companies]]
+name = "Intel"
+ats = "workday"
+url = "https://intel.wd1.myworkdayjobs.com/External"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "Adobe"
+ats = "workday"
+url = "https://adobe.wd5.myworkdayjobs.com/external_experienced"   # interns + "University Graduate" roles live here too
+searches = ["intern", "university graduate"]
+
+[[companies]]
+name = "Salesforce"
+ats = "workday"
+url = "https://salesforce.wd12.myworkdayjobs.com/External_Career_Site"
+searches = ["intern", "new grad", "university"]
+
+[[companies]]
+name = "RBC"
+ats = "workday"
+url = "https://rbc.wd3.myworkdayjobs.com/RBCGLOBAL1"
+# whole board (~800): "co-op" search matches all of it anyway; ~5s per page, hence the timeout
+timeout = 600
