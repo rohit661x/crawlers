@@ -9,9 +9,11 @@ from urllib.parse import urlparse
 from .base import Job, FetchResult, RecordGuard, DEFAULT_MAX_JOBS, remote_hint as _remote_hint, get_json as _get_json, searches, dedup
 
 async def greenhouse(client, co) -> FetchResult:
+    # no content=true: it adds every job's full HTML description (~12x the bytes, ~10 MB for
+    # Databricks) just for `departments`, which nothing reads; set `content = true` to get them back
     slug = co["slug"]
     data = await _get_json(client, f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
-                           params={"content": "true"})
+                           params={"content": "true"} if co.get("content") else None)
     jobs, guard = [], RecordGuard()
     for j in data["jobs"]:
         with guard:
