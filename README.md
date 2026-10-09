@@ -15,7 +15,10 @@ Proxy: set `PROXY_URL` in `.env`; per-crawler override by passing `proxy_url=` t
 
 Polls company job boards hourly and pings Telegram (via `hermes send`) about new jobs that pass the filters.
 
-- `config.toml`  companies (`ats` = greenhouse | lever | ashby | smartrecruiters | workday | amazon | eightfold | google | apple | meta | custom) and `[filters]`
+- `config.toml`  ~136 companies (`ats` = greenhouse | lever | ashby | smartrecruiters | workable | workday | amazon |
+                 eightfold | google | apple | janestreet | meta | custom) and `[filters]`. Per-company options:
+                 `searches`, `max_jobs`, `timeout` (slow boards, e.g. RBC = 600), `disabled`, a `[companies.filters]`
+                 override, and `content = true` (greenhouse only: adds departments, ~12x larger responses)
 - `fetchers/`    one fetcher per source -> normalized `Job` (`models.py`): `ats.py` standard boards, `bigtech.py` own backends, `browser.py` Playwright (meta, custom)
 - `store.py`     SQLite at `$CAREERS_DB` (default `~/data/state/careers.db`): first/last seen, closed, notify state.
                  A company's first poll is a silent baseline plus one "now tracking" summary.
@@ -29,6 +32,11 @@ the next run sends open jobs that match the new filters but didn't match the old
 Add companies: `python -m crawlers.careers.discover "Stripe" "Notion" [--ats greenhouse,ashby] [--add]`
 finds the ATS + slug (careers-page links, then slug guesses verified by board name) and appends confident
 matches to `config.toml`. Check the reported board name: a guessed domain can be another company.
+It only finds slug-based boards; Workday (`url` = the board, e.g. `https://intel.wd1.myworkdayjobs.com/External`,
+check `POST <host>/wday/cxs/<tenant>/<site>/jobs` returns a `total`) and Eightfold (`host` + `domain`, e.g.
+Qualcomm's `careers.qualcomm.com`; `filter_seniority = "Intern"` / `"Entry"` narrow it) are added by hand.
+Workday's `searchText` is fuzzy ("co-op" can match the whole board): when a search returns most of the board,
+drop `searches` and fetch everything; the filters do the narrowing.
 
 Reliability (`[http]`, `[alerts]` in config): per-host pacing + retry/backoff on 429/5xx/network errors
 (honours Retry-After), per-company timeout, run lock. Guards against broken fetchers: a listing that shrinks
