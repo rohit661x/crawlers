@@ -144,7 +144,7 @@ async def workday(client, co) -> FetchResult:
                     loc = j.get("locationsText", "")
                     jobs.append(Job(
                         company=co["name"], ats="workday", job_id=m.group(1) if m else path,
-                        title=j.get("title") or _wd_title(path),
+                        title=j.get("title") or _wd_title(path), title_guessed=not j.get("title"),
                         url=f"{base}{path}", location=loc,
                         remote=True if "remote" in (j.get("remoteType") or "").lower() else _remote_hint(loc),
                     ))

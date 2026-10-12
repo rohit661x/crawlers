@@ -78,9 +78,12 @@ async def fetch_all(companies: list[dict], cfg: dict) -> tuple[list[tuple[dict, 
         results = await asyncio.gather(*(one(co) for co in companies))
         return results, client.retried
 
-def notify_pending(store, global_filter, per_company, dry_run, now) -> int:
-    """Queue messages for pending jobs that match; returns how many jobs were queued."""
-    pending = store.pending()
+def notify_pending(store, global_filter, per_company, dry_run, now, hold_hours: float = 6) -> int:
+    """Queue messages for pending jobs that match; returns how many jobs were queued.
+    A job whose title was guessed from its URL stays pending for up to hold_hours, so the
+    match/filter decision (made once) waits for the ATS to send the real title."""
+    cutoff = (datetime.fromisoformat(now) - timedelta(hours=hold_hours)).isoformat()
+    pending = [r for r in store.pending() if not (r["title_guessed"] and r["first_seen"] > cutoff)]
     matched, filtered = [], []
     for r in pending:
         (matched if per_company.get(r["company"], global_filter).matches(r) else filtered).append(r)
@@ -253,7 +256,8 @@ def run(args):
                          cap=dcfg.get("baseline_max", 50), dry_run=args.dry_run, now=now)
     digest.refilter(store, cfg, global_filter, per_company,
                     cap=dcfg.get("refilter_max", 100), dry_run=args.dry_run, now=now)
-    queued = notify_pending(store, global_filter, per_company, args.dry_run, now)
+    queued = notify_pending(store, global_filter, per_company, args.dry_run, now,
+                            acfg.get("guessed_title_hold_hours", 6))
     sent = queued if args.dry_run else notify.flush(store, now)
     sink.close()
     finished = datetime.now(timezone.utc)

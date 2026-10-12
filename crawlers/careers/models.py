@@ -12,6 +12,7 @@ class Job:
     remote: bool | None = None  # None = ATS didn't say
     department: str = ""
     posted_at: str | None = None  # ISO8601 when the ATS gives one
+    title_guessed: bool = False   # title derived from the URL slug (ATS omitted it); may be stale
 
 @dataclass
 class FetchResult:

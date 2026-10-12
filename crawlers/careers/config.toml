@@ -25,6 +25,7 @@ burst_min = 25           # more "new" jobs than max(burst_min, burst_ratio * ope
 burst_ratio = 0.5        # => ids probably changed; absorb silently as re-baseline
 close_after_runs = 3     # a job closes only after missing from this many complete listings in a row
 max_skip_ratio = 0.05    # > 5% of a listing's records unparseable => keep the rest, skip closures
+guessed_title_hold_hours = 6  # new job whose title came from its URL: wait this long for the real one before filtering
 
 [filters]
 # Level: early-career only.

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_seen   TEXT NOT NULL,
     closed_at   TEXT,
     missed      INTEGER NOT NULL DEFAULT 0,  -- complete listings in a row the job was absent from
+    title_guessed INTEGER NOT NULL DEFAULT 0,  -- title came from the URL slug, not the ATS (Job.title_guessed)
     -- NULL = pending, 'queued' (in outbox), 'sent', 'filtered' (didn't match),
     -- 'baseline' (existed on first poll), 'dropped' (outbox gave up delivering it)
     notify_state TEXT,
@@ -75,8 +76,11 @@ class Store:
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(company_status)")}
         if "alert_state" not in cols:
             self.db.execute("ALTER TABLE company_status ADD COLUMN alert_state TEXT")
-        if "missed" not in {r[1] for r in self.db.execute("PRAGMA table_info(jobs)")}:
+        job_cols = {r[1] for r in self.db.execute("PRAGMA table_info(jobs)")}
+        if "missed" not in job_cols:
             self.db.execute("ALTER TABLE jobs ADD COLUMN missed INTEGER NOT NULL DEFAULT 0")
+        if "title_guessed" not in job_cols:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN title_guessed INTEGER NOT NULL DEFAULT 0")
 
     def sync(self, company: str, jobs: list[Job], complete: bool, now: str, allow_empty: bool = False,
              close_after: int = CLOSE_AFTER) -> dict:
@@ -87,6 +91,7 @@ class Store:
         non-empty listings in a row is marked closed; one flaky listing (search results
         shifting between pages) only bumps its `missed` count, and seeing it again resets it.
         Incomplete listings don't count either way. An empty listing only counts with allow_empty.
+        A guessed title (Job.title_guessed) never overwrites a real one already stored.
         """
         existing = {r["job_id"]: r["closed_at"] for r in self.db.execute(
             "SELECT job_id, closed_at FROM jobs WHERE company = ?", (company,))}
@@ -98,16 +103,21 @@ class Store:
                 vals = {k: row[k] for k in _FIELDS}
                 if j.job_id not in existing:
                     self.db.execute(
-                        f"INSERT INTO jobs (company, job_id, {', '.join(_FIELDS)}, first_seen, last_seen, notify_state)"
-                        f" VALUES (?, ?, {', '.join('?' * len(_FIELDS))}, ?, ?, ?)",
-                        (company, j.job_id, *vals.values(), now, now, "baseline" if baseline else None))
+                        f"INSERT INTO jobs (company, job_id, {', '.join(_FIELDS)}, title_guessed, first_seen,"
+                        f" last_seen, notify_state) VALUES (?, ?, {', '.join('?' * len(_FIELDS))}, ?, ?, ?, ?)",
+                        (company, j.job_id, *vals.values(), int(j.title_guessed), now, now,
+                         "baseline" if baseline else None))
                     existing[j.job_id] = None
                     new.append(j)
                 else:
                     if existing[j.job_id] is not None:
                         reopened.append(j)
+                    if j.title_guessed:  # keep whatever title is stored; it's real or equally guessed
+                        del vals["title"]
+                    else:
+                        vals["title_guessed"] = 0
                     self.db.execute(
-                        f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in _FIELDS)}, last_seen = ?, closed_at = NULL,"
+                        f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in vals)}, last_seen = ?, closed_at = NULL,"
                         " missed = 0 WHERE company = ? AND job_id = ?",
                         (*vals.values(), now, company, j.job_id))
             closed = []

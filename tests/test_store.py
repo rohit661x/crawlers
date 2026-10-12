@@ -67,3 +67,18 @@ def test_migrates_old_db_without_missed_column(tmp_path):
     db.commit(); db.close()
     store = Store(path)
     assert store.db.execute("SELECT missed FROM jobs").fetchone()[0] == 0
+
+def titles(store):
+    return {r[0]: (r[1], r[2]) for r in store.db.execute("SELECT job_id, title, title_guessed FROM jobs")}
+
+def test_guessed_title_doesnt_overwrite_real_one(store):
+    store.sync("Acme", [job("a", title="Senior Engineer, GPU")], True, "2026-10-06T10:00:00+00:00")
+    store.sync("Acme", [job("a", title="Engineer", title_guessed=True)], True, "2026-10-06T11:00:00+00:00")
+    assert titles(store) == {"a": ("Senior Engineer, GPU", 0)}
+
+def test_real_title_replaces_guessed_one(store):
+    store.sync("Acme", [job("x")], True, "2026-10-06T09:00:00+00:00")  # not a baseline run below
+    store.sync("Acme", [job("x"), job("a", title="Engineer", title_guessed=True)], True, "2026-10-06T10:00:00+00:00")
+    assert titles(store)["a"] == ("Engineer", 1)
+    store.sync("Acme", [job("x"), job("a", title="Senior Engineer, GPU")], True, "2026-10-06T11:00:00+00:00")
+    assert titles(store)["a"] == ("Senior Engineer, GPU", 0)

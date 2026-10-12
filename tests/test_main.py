@@ -65,3 +65,25 @@ def test_dry_run_crash_doesnt_ping(monkeypatch, pings):
 
 def test_ping_without_url_is_a_noop():
     assert health.ping(url="") is False
+
+def test_guessed_title_held_until_real_or_timeout(store):
+    from crawlers.careers.filters import JobFilter
+    gf = JobFilter({"title_include": ["intern"]})
+    T0 = "2026-10-06T10:00:00+00:00"
+    store.sync("Acme", [job("x")], True, T0)  # baseline
+    store.sync("Acme", [job("x"), job("g", title="Engineer", title_guessed=True)], True, T0)
+    state = lambda: store.db.execute("SELECT notify_state FROM jobs WHERE job_id = 'g'").fetchone()[0]
+    assert poller.notify_pending(store, gf, {}, True, "2026-10-06T15:00:00+00:00") == 0
+    assert state() is None  # still waiting for the real title
+    poller.notify_pending(store, gf, {}, True, "2026-10-06T16:30:00+00:00")
+    assert state() == "filtered"  # gave up waiting; decided on the guess
+
+def test_guessed_title_decided_on_real_title_once_it_arrives(store):
+    from crawlers.careers.filters import JobFilter
+    gf = JobFilter({"title_include": ["intern"]})
+    T0, T1 = "2026-10-06T10:00:00+00:00", "2026-10-06T11:00:00+00:00"
+    store.sync("Acme", [job("x")], True, T0)
+    store.sync("Acme", [job("x"), job("g", title="Engineer", title_guessed=True)], True, T0)
+    poller.notify_pending(store, gf, {}, True, T0)
+    store.sync("Acme", [job("x"), job("g", title="Engineer Intern")], True, T1)
+    assert poller.notify_pending(store, gf, {}, True, T1) == 1
