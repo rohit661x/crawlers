@@ -536,6 +536,9 @@ slug = "twilio"
 name = "HubSpot"
 ats = "greenhouse"
 slug = "hubspotjobs"
+# board 404s since 2026-10-06: HubSpot left public Greenhouse (careers page now renders client-side);
+# needs a `custom` browser fetcher or the new ATS before re-enabling
+disabled = true
 
 [[companies]]
 name = "Toast"

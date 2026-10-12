@@ -24,13 +24,26 @@ def wd_handler(pages: list[dict]):
 
 WD = {"name": "NVIDIA", "ats": "workday", "url": "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"}
 
-def test_workday_skips_posting_without_title():
-    # the real failure: one posting without `title` raised KeyError and failed all of NVIDIA
-    postings = [wd_posting(1), {"externalPath": "/job/x/No-Title_JR2"}, wd_posting(3)]
+def test_workday_title_from_path_when_missing():
+    # the real failure: postings without `title` raised KeyError and failed all of NVIDIA / TD Bank
+    postings = [wd_posting(1), {"externalPath": "/job/x/Software-Engineer--New-Grad_JR2"}, wd_posting(3)]
+    res = run(workday, WD, wd_handler([{"total": 3, "jobPostings": postings}]))
+    assert [j.job_id for j in res.jobs] == ["JR1", "JR2", "JR3"]
+    assert res.jobs[1].title == "Software Engineer New Grad"
+    assert res.skipped == 0 and res.complete
+
+def test_workday_all_titles_missing_is_not_a_failure():
+    page = {"total": 2, "jobPostings": [{"externalPath": f"/job/x/Intern_JR{n}"} for n in (1, 2)]}
+    res = run(workday, WD, wd_handler([page]))
+    assert [j.title for j in res.jobs] == ["Intern", "Intern"] and res.skipped == 0
+
+def test_workday_skips_posting_without_path():
+    # no externalPath means no job id; storing it under "" would merge unrelated postings
+    postings = [wd_posting(1), {"title": "Orphan"}, wd_posting(3)]
     res = run(workday, WD, wd_handler([{"total": 3, "jobPostings": postings}]))
     assert [j.job_id for j in res.jobs] == ["JR1", "JR3"]
-    assert res.skipped == 1 and "KeyError" in res.skip_error
-    assert res.complete
+    assert res.skipped == 1 and "externalPath" in res.skip_error
+    assert not res.complete  # 2 unique postings seen vs total 3
 
 def test_workday_pagination_drift_marks_incomplete():
     # total says 21, but results shifted while paging: page 2 repeats a page-1 posting

@@ -98,6 +98,14 @@ WORKDAY_TOTAL_CEILING = 2000  # Workday never reports/serves more than this per 
 _LOCALE = re.compile(r"^[a-z]{2}-[A-Z]{2}$")
 _WD_REQ = re.compile(r"_([A-Za-z0-9-]+)$")
 
+def _wd_title(path: str) -> str:
+    """Title from a posting's path, for postings that arrive without `title` (Workday
+    intermittently drops it): /job/Santa-Clara/Software-Engineer--Intern_JR123 -> Software Engineer Intern."""
+    slug = _WD_REQ.sub("", path.rsplit("/", 1)[-1])
+    if not slug.strip("-"):
+        raise KeyError("title")
+    return " ".join(slug.replace("-", " ").split())
+
 async def workday(client, co) -> FetchResult:
     """url: the public careers page, e.g. https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite
     or https://wd1.myworkdaysite.com/recruiting/snapchat/snap (tenant in the path, not the host).
@@ -128,14 +136,15 @@ async def workday(client, co) -> FetchResult:
             page = data.get("jobPostings") or []
             if not page:
                 break
-            seen.update(j.get("externalPath") for j in page if isinstance(j, dict))
+            seen.update(j["externalPath"] for j in page if isinstance(j, dict) and j.get("externalPath"))
             for j in page:
                 with guard:
-                    path = j.get("externalPath", "")
+                    path = j["externalPath"]  # the job id comes from it; without one the record is useless
                     m = _WD_REQ.search(path.rsplit("/", 1)[-1])
                     loc = j.get("locationsText", "")
                     jobs.append(Job(
-                        company=co["name"], ats="workday", job_id=m.group(1) if m else path, title=j["title"],
+                        company=co["name"], ats="workday", job_id=m.group(1) if m else path,
+                        title=j.get("title") or _wd_title(path),
                         url=f"{base}{path}", location=loc,
                         remote=True if "remote" in (j.get("remoteType") or "").lower() else _remote_hint(loc),
                     ))
