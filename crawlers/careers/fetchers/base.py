@@ -63,6 +63,13 @@ def dedup(jobs: list[Job]) -> list[Job]:
             out.append(j)
     return out
 
+def _is_json(resp: httpx.Response) -> bool:
+    try:
+        resp.json()
+        return True
+    except ValueError:
+        return False
+
 class RetryClient:
     """Wraps httpx.AsyncClient: per-host pacing plus retries with backoff on 429/5xx and
     network errors. Fetchers use it like a client (get/post); after the last retry the
@@ -72,8 +79,11 @@ class RetryClient:
     host_intervals    {host or domain suffix: seconds}, e.g. {"myworkdayjobs.com": 0.5}
     retries           extra attempts after the first
     max_wait          give up instead of sleeping longer than this (e.g. Retry-After: 3600)
+
+    expect_json=True on a request also retries a 2xx whose body isn't JSON (Workday now and then
+    answers 200 with an HTML error page).
     """
-    RETRY_STATUS = {429, 500, 502, 503, 504}
+    RETRY_STATUS = {429, 500, 502, 503, 504, 520, 522, 524}  # 52x: Cloudflare origin errors
 
     def __init__(self, client: httpx.AsyncClient, min_interval: float = 0.25,
                  host_intervals: dict | None = None, retries: int = 3, backoff: float = 2.0,
@@ -103,14 +113,15 @@ class RetryClient:
             return float(ra)
         return self.backoff * 2 ** attempt * random.uniform(0.8, 1.2)
 
-    async def request(self, method: str, url, **kw) -> httpx.Response:
+    async def request(self, method: str, url, expect_json: bool = False, **kw) -> httpx.Response:
         host = httpx.URL(str(url)).host
         for attempt in range(self.retries + 1):
             await self._pace(host)
             resp, err = None, None
             try:
                 resp = await self.client.request(method, url, **kw)
-                if resp.status_code not in self.RETRY_STATUS:
+                if resp.status_code not in self.RETRY_STATUS and not (
+                        expect_json and resp.is_success and not _is_json(resp)):
                     return resp
             except httpx.TransportError as e:  # timeouts, connection resets, DNS
                 err = e
@@ -123,10 +134,16 @@ class RetryClient:
             self._next[host] = max(self._next.get(host, 0), time.monotonic() + wait)
             self.retried += 1
             log.info("retry %s %s in %.0fs (attempt %d/%d): %s", method, host, wait, attempt + 1,
-                     self.retries, f"HTTP {resp.status_code}" if resp is not None else repr(err))
+                     self.retries, repr(err) if resp is None else f"HTTP {resp.status_code}"
+                     + ("" if resp.status_code in self.RETRY_STATUS else " (not JSON)"))
 
     async def get(self, url, **kw):
         return await self.request("GET", url, **kw)
 
     async def post(self, url, **kw):
         return await self.request("POST", url, **kw)
+
+def json_retry(client) -> dict:
+    """Request kwargs asking RetryClient to retry non-JSON 2xx bodies; a bare httpx client
+    (tests, discover.py) doesn't take the argument."""
+    return {"expect_json": True} if isinstance(client, RetryClient) else {}

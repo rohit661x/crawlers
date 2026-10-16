@@ -2,6 +2,7 @@
 import asyncio, json
 import httpx
 from crawlers.careers.fetchers.ats import greenhouse, workday
+from crawlers.careers.fetchers.base import RetryClient
 
 def run(fetcher, co, handler):
     async def go():
@@ -68,6 +69,42 @@ def test_workday_myworkdaysite_url():
     res = run(workday, co, handler)
     assert seen[0] == "https://wd1.myworkdaysite.com/wday/cxs/snapchat/snap/jobs"
     assert res.jobs[0].url == "https://wd1.myworkdaysite.com/recruiting/snapchat/snap/job/LA/X_R1"
+
+def run_retrying(fetcher, co, handler):
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await fetcher(RetryClient(client, min_interval=0, backoff=0), co)
+    return asyncio.run(go())
+
+def test_workday_retries_html_200():
+    # the real failure: Workday sometimes answers 200 with an HTML page -> JSONDecodeError failed the company
+    calls = []
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(200, text="<html>Service Unavailable</html>", headers={"content-type": "text/html"})
+        return httpx.Response(200, json={"total": 1, "jobPostings": [wd_posting(1)]})
+    res = run_retrying(workday, WD, handler)
+    assert len(calls) == 2 and [j.job_id for j in res.jobs] == ["JR1"] and res.complete
+
+def test_workday_html_200_still_fails_after_retries():
+    handler = lambda request: httpx.Response(200, text="<html></html>")
+    try:
+        run_retrying(workday, WD, handler)
+    except ValueError:  # json.JSONDecodeError
+        pass
+    else:
+        raise AssertionError("expected a JSON error once retries run out")
+
+def test_retry_client_retries_cloudflare_520():
+    calls = []
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(520 if len(calls) == 1 else 200, json={"ok": True})
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await RetryClient(client, min_interval=0, backoff=0).get("https://x.test/")
+    assert asyncio.run(go()).status_code == 200 and len(calls) == 2
 
 def test_greenhouse_skips_malformed_record():
     data = {"jobs": [

@@ -6,7 +6,7 @@ url + searches (workday), max_jobs (paginated sources).
 import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-from .base import Job, FetchResult, RecordGuard, DEFAULT_MAX_JOBS, remote_hint as _remote_hint, get_json as _get_json, searches, dedup
+from .base import json_retry, Job, FetchResult, RecordGuard, DEFAULT_MAX_JOBS, remote_hint as _remote_hint, get_json as _get_json, searches, dedup
 
 async def greenhouse(client, co) -> FetchResult:
     # no content=true: it adds every job's full HTML description (~12x the bytes, ~10 MB for
@@ -128,7 +128,7 @@ async def workday(client, co) -> FetchResult:
                 complete = False
                 break
             r = await client.post(endpoint, json={"appliedFacets": {}, "limit": 20, "offset": offset,
-                                                  "searchText": q})
+                                                  "searchText": q}, **json_retry(client))
             r.raise_for_status()
             data = r.json()
             if total is None:  # only the first page reports the real total

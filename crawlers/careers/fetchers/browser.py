@@ -3,6 +3,9 @@ import asyncio
 from urllib.parse import urljoin
 from .base import Job, FetchResult, RecordGuard, remote_hint, searches, dedup
 
+META_RETRY_STATUS = {429, 500, 502, 503, 504}
+META_RELOAD_WAITS = (15, 30)  # seconds before each reload; stays well inside the company timeout
+
 async def meta(ctx, co) -> FetchResult:
     """metacareers.com blocks plain HTTP; load the search page and capture the GraphQL
     response the page itself makes. searches: query strings, e.g. "roles[0]=Internship"."""
@@ -24,10 +27,20 @@ async def meta(ctx, co) -> FetchResult:
 
         page.on("response", on_response)
         try:
-            await page.goto(f"https://www.metacareers.com/jobs?sort_by_new=true&{q}", wait_until="domcontentloaded")
+            # metacareers intermittently answers the page load itself with 429; the page then
+            # never queries GraphQL, so reload (same context keeps the cookies) after a pause
+            for wait in (*META_RELOAD_WAITS, None):
+                resp = await page.goto(f"https://www.metacareers.com/jobsearch/?sort_by_new=true&{q}",
+                                       wait_until="domcontentloaded")
+                status = resp.status if resp else 0
+                if status not in META_RETRY_STATUS:
+                    break
+                if wait is None:
+                    raise ValueError(f"meta: HTTP {status} loading search {q!r}")
+                await asyncio.sleep(wait)
             all_jobs = await asyncio.wait_for(got, timeout=45)
         except asyncio.TimeoutError:
-            raise ValueError(f"meta: no job data for search {q!r} (page format changed?)")
+            raise ValueError(f"meta: no job data for search {q!r} (HTTP {status}; page format changed?)")
         finally:
             await page.close()
         for j in all_jobs:
