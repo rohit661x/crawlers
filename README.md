@@ -48,7 +48,8 @@ health summary (first run after `[health].hour`) doubles as a dead-man's switch.
 
 Malformed records are skipped rather than failing the company (over 5% skipped pauses closures; all
 skipped counts as a failure), and a job only closes after missing from 3 complete listings in a row, so
-search results shifting between pages don't close and reopen it. Every Telegram message goes through an
+search results shifting between pages don't close and reopen it. A Workday posting that arrives without its path
+(no id, no URL) still keeps its job open via the requisition id in `bulletFields`. Every Telegram message goes through an
 outbox table: a failed send is retried next run (dropped after 24 failed runs) instead of lost.
 
 Dead-man switches: each full run pings `HEALTHCHECK_URL` (e.g. a healthchecks.io check, period 1h, grace 2h),

@@ -83,7 +83,7 @@ class Store:
             self.db.execute("ALTER TABLE jobs ADD COLUMN title_guessed INTEGER NOT NULL DEFAULT 0")
 
     def sync(self, company: str, jobs: list[Job], complete: bool, now: str, allow_empty: bool = False,
-             close_after: int = CLOSE_AFTER) -> dict:
+             close_after: int = CLOSE_AFTER, present=()) -> dict:
         """Upsert one company's current listing. Returns {baseline, new, reopened, closed}.
 
         The first time a company is seen, its jobs are stored as 'baseline' so we don't
@@ -92,6 +92,8 @@ class Store:
         shifting between pages) only bumps its `missed` count, and seeing it again resets it.
         Incomplete listings don't count either way. An empty listing only counts with allow_empty.
         A guessed title (Job.title_guessed) never overwrites a real one already stored.
+        `present` (FetchResult.present): ids the listing returned unparseably; matching open jobs
+        ("<id>" or "<id>-<n>") count as seen. Nothing is inserted or reopened from them.
         """
         existing = {r["job_id"]: r["closed_at"] for r in self.db.execute(
             "SELECT job_id, closed_at FROM jobs WHERE company = ?", (company,))}
@@ -120,6 +122,9 @@ class Store:
                         f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in vals)}, last_seen = ?, closed_at = NULL,"
                         " missed = 0 WHERE company = ? AND job_id = ?",
                         (*vals.values(), now, company, j.job_id))
+            for req in present:  # GLOB: case-sensitive; ids are [A-Za-z0-9-], no wildcards
+                self.db.execute("UPDATE jobs SET last_seen = ?, missed = 0 WHERE company = ? AND closed_at IS NULL"
+                                " AND (job_id = ? OR job_id GLOB ?)", (now, company, req, f"{req}-*"))
             closed = []
             if complete and (jobs or allow_empty):
                 absent = "company = ? AND closed_at IS NULL AND last_seen < ?"

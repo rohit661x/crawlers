@@ -82,3 +82,20 @@ def test_real_title_replaces_guessed_one(store):
     assert titles(store)["a"] == ("Engineer", 1)
     store.sync("Acme", [job("x"), job("a", title="Senior Engineer, GPU")], True, "2026-10-06T11:00:00+00:00")
     assert titles(store)["a"] == ("Senior Engineer, GPU", 0)
+
+def present_runs(store, start_hour, listing, present, n=3):
+    for h in range(start_hour, start_hour + n):
+        store.sync("Acme", [job(x) for x in listing], True, f"2026-10-06T{h}:00:00+00:00", present=present)
+
+def test_present_keeps_unparseable_job_open(store):
+    # the real case: RBC's R-0000178593 came back as {"bulletFields": ["R-0000178593"]}, no path
+    runs(store, ["a", "R-1", "R-2-1", "R-20"])
+    present_runs(store, 11, ["a"], ["R-2"])
+    # R-2 covers its repost R-2-1, but not R-1 or R-20: those close as usual
+    assert open_ids(store) == {"a", "R-2-1"}
+
+def test_present_never_inserts_or_reopens(store):
+    runs(store, ["a", "b"], ["a"], ["a"], ["a"])  # b closed
+    present_runs(store, 14, ["a"], ["b", "unknown"], n=1)
+    assert open_ids(store) == {"a"}
+    assert {r[0] for r in store.db.execute("SELECT job_id FROM jobs")} == {"a", "b"}

@@ -3,7 +3,7 @@
 Config keys: slug (greenhouse/lever/ashby/smartrecruiters), region = "eu" (lever),
 url + searches (workday), max_jobs (paginated sources).
 """
-import re
+import json, re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from .base import json_retry, Job, FetchResult, RecordGuard, DEFAULT_MAX_JOBS, remote_hint as _remote_hint, get_json as _get_json, searches, dedup
@@ -106,6 +106,15 @@ def _wd_title(path: str) -> str:
         raise KeyError("title")
     return " ".join(slug.replace("-", " ").split())
 
+def _wd_orphan_reqs(posting) -> set[str]:
+    """Requisition ids in a path-less posting's bulletFields (often all Workday sends for it,
+    e.g. {"bulletFields": ["R-0000178593"]}), normalized like job ids: TD's "R_1519497" -> "1519497".
+    Other fields ("Spotlight Job", a department) don't parse or won't match a stored job."""
+    fields = posting.get("bulletFields") if isinstance(posting, dict) else None
+    if not isinstance(fields, list):
+        return set()
+    return {m.group(1) for f in fields if isinstance(f, str) and (m := _WD_REQ.search("_" + f))}
+
 async def workday(client, co) -> FetchResult:
     """url: the public careers page, e.g. https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite
     or https://wd1.myworkdaysite.com/recruiting/snapchat/snap (tenant in the path, not the host).
@@ -120,9 +129,9 @@ async def workday(client, co) -> FetchResult:
         base = f"https://{u.hostname}/{site}"
     endpoint = f"https://{u.hostname}/wday/cxs/{tenant}/{site}/jobs"
     cap = co.get("max_jobs", DEFAULT_MAX_JOBS)
-    jobs, complete, guard = [], True, RecordGuard()
+    jobs, complete, guard, present = [], True, RecordGuard(), set()
     for q in searches(co, ""):
-        offset, total, seen, pathless = 0, None, set(), 0
+        offset, total, seen, pathless = 0, None, set(), set()
         while total is None or offset < total:
             if offset >= cap:
                 complete = False
@@ -136,9 +145,12 @@ async def workday(client, co) -> FetchResult:
             page = data.get("jobPostings") or []
             if not page:
                 break
-            paths = [j["externalPath"] for j in page if isinstance(j, dict) and j.get("externalPath")]
-            seen.update(paths)
-            pathless += len(page) - len(paths)
+            for j in page:
+                if isinstance(j, dict) and j.get("externalPath"):
+                    seen.add(j["externalPath"])
+                else:  # by content, so one orphan repeated across pages counts once
+                    pathless.add(json.dumps(j, sort_keys=True, default=str))
+                    present |= _wd_orphan_reqs(j)
             for j in page:
                 with guard:
                     path = j["externalPath"]  # the job id comes from it; without one the record is useless
@@ -153,13 +165,16 @@ async def workday(client, co) -> FetchResult:
             offset += len(page)
         # fewer unique postings than the reported total: results shifted between pages while
         # we paged (or a page came back short), so some open jobs are missing from this run.
-        # Path-less records were returned, just unparseable: they count here, and main.py's
-        # max_skip_ratio decides whether that many skips should pause closures
-        if total and len(seen) + pathless < min(total, cap):
+        # Path-less records were returned, just unparseable: they count here, main.py's
+        # max_skip_ratio decides whether that many skips should pause closures, and their
+        # requisition ids (`present`) keep the jobs they belong to from closing
+        if total and len(seen) + len(pathless) < min(total, cap):
             complete = False
         # at the ceiling the listing is likely cut off; narrow it with `searches` in config
         complete = complete and (total or 0) < WORKDAY_TOTAL_CEILING
-    return guard.result(dedup(jobs), complete)
+    res = guard.result(dedup(jobs), complete)
+    res.present = sorted(present)
+    return res
 
 _WORKABLE_LEVELS = {"internship": "Internship", "entry level": "Entry level"}
 

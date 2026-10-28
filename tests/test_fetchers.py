@@ -43,7 +43,7 @@ def test_workday_skips_posting_without_path():
     postings = [wd_posting(1), {"title": "Orphan"}, wd_posting(3)]
     res = run(workday, WD, wd_handler([{"total": 3, "jobPostings": postings}]))
     assert [j.job_id for j in res.jobs] == ["JR1", "JR3"]
-    assert res.skipped == 1 and "externalPath" in res.skip_error
+    assert res.skipped == 1 and "externalPath" in res.skip_error and res.present == []
     # the orphan was returned, not missing: one bad record mustn't block a company's closures
     # (the real failure: TD Bank / NVIDIA closures skipped for days); parse_verdict judges the skips
     assert res.complete
@@ -54,6 +54,22 @@ def test_workday_pathless_record_does_not_mask_pagination_drift():
     page2 = {"total": 0, "jobPostings": [wd_posting(5), wd_posting(21)]}
     res = run(workday, WD, wd_handler([page1, page2]))
     assert res.skipped == 1 and not res.complete
+
+def test_workday_pathless_requisition_ids_reported_present():
+    # what Workday actually sends (RBC, TD): no path, no title, only the requisition id
+    postings = [wd_posting(1), {"bulletFields": ["JR2"]}, {"bulletFields": ["R_77", "Retail Sales & Service"]},
+                {"bulletFields": ["Spotlight Job", "JR9"]}]
+    res = run(workday, WD, wd_handler([{"total": 4, "jobPostings": postings}]))
+    assert [j.job_id for j in res.jobs] == ["JR1"] and res.skipped == 3 and res.complete
+    assert res.present == ["77", "JR2", "JR9"]  # TD-style "R_77" normalized like job ids from paths
+
+def test_workday_repeated_orphan_does_not_mask_pagination_drift():
+    # total 21; the same orphan comes back on page 2 instead of job #19: still one record short
+    orphan = {"bulletFields": ["JR99"]}
+    page1 = {"total": 21, "jobPostings": [wd_posting(n) for n in range(19)] + [orphan]}
+    page2 = {"total": 0, "jobPostings": [dict(orphan)]}
+    res = run(workday, WD, wd_handler([page1, page2]))
+    assert not res.complete
 
 def test_workday_pagination_drift_marks_incomplete():
     # total says 21, but results shifted while paging: page 2 repeats a page-1 posting

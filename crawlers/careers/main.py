@@ -222,7 +222,7 @@ def run(args):
 
         # an accepted shrink has already waited shrink_accept runs; close the rest now
         ch = store.sync(name, res.jobs, complete, now, allow_empty=accepted,
-                        close_after=1 if accepted else close_after)
+                        close_after=1 if accepted else close_after, present=res.present)
         store.record_ok(name, count, now)
         if accepted:  # the ℹ️ message above already says so; no separate "recovered"
             store.set_alert_state(name, None)

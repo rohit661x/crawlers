@@ -21,3 +21,6 @@ class FetchResult:
     complete: bool = True
     skipped: int = 0          # records that failed to parse (see fetchers.base.RecordGuard)
     skip_error: str = ""      # the first such error, for logs/alerts
+    # ids of open jobs the listing returned but couldn't parse (Workday postings without a path):
+    # still there, so they mustn't close. Each also covers "<id>-<n>" (Workday reposts a requisition as -1, -2).
+    present: list[str] = field(default_factory=list)
