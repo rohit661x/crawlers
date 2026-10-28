@@ -122,7 +122,7 @@ async def workday(client, co) -> FetchResult:
     cap = co.get("max_jobs", DEFAULT_MAX_JOBS)
     jobs, complete, guard = [], True, RecordGuard()
     for q in searches(co, ""):
-        offset, total, seen = 0, None, set()
+        offset, total, seen, pathless = 0, None, set(), 0
         while total is None or offset < total:
             if offset >= cap:
                 complete = False
@@ -136,7 +136,9 @@ async def workday(client, co) -> FetchResult:
             page = data.get("jobPostings") or []
             if not page:
                 break
-            seen.update(j["externalPath"] for j in page if isinstance(j, dict) and j.get("externalPath"))
+            paths = [j["externalPath"] for j in page if isinstance(j, dict) and j.get("externalPath")]
+            seen.update(paths)
+            pathless += len(page) - len(paths)
             for j in page:
                 with guard:
                     path = j["externalPath"]  # the job id comes from it; without one the record is useless
@@ -150,8 +152,10 @@ async def workday(client, co) -> FetchResult:
                     ))
             offset += len(page)
         # fewer unique postings than the reported total: results shifted between pages while
-        # we paged (or a page came back short), so some open jobs are missing from this run
-        if total and len(seen) < min(total, cap):
+        # we paged (or a page came back short), so some open jobs are missing from this run.
+        # Path-less records were returned, just unparseable: they count here, and main.py's
+        # max_skip_ratio decides whether that many skips should pause closures
+        if total and len(seen) + pathless < min(total, cap):
             complete = False
         # at the ceiling the listing is likely cut off; narrow it with `searches` in config
         complete = complete and (total or 0) < WORKDAY_TOTAL_CEILING

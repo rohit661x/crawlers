@@ -44,7 +44,16 @@ def test_workday_skips_posting_without_path():
     res = run(workday, WD, wd_handler([{"total": 3, "jobPostings": postings}]))
     assert [j.job_id for j in res.jobs] == ["JR1", "JR3"]
     assert res.skipped == 1 and "externalPath" in res.skip_error
-    assert not res.complete  # 2 unique postings seen vs total 3
+    # the orphan was returned, not missing: one bad record mustn't block a company's closures
+    # (the real failure: TD Bank / NVIDIA closures skipped for days); parse_verdict judges the skips
+    assert res.complete
+
+def test_workday_pathless_record_does_not_mask_pagination_drift():
+    # total 22; page 2 repeats a page-1 posting, so job #20 is missing even counting the orphan
+    page1 = {"total": 22, "jobPostings": [wd_posting(n) for n in range(19)] + [{"title": "Orphan"}]}
+    page2 = {"total": 0, "jobPostings": [wd_posting(5), wd_posting(21)]}
+    res = run(workday, WD, wd_handler([page1, page2]))
+    assert res.skipped == 1 and not res.complete
 
 def test_workday_pagination_drift_marks_incomplete():
     # total says 21, but results shifted while paging: page 2 repeats a page-1 posting
