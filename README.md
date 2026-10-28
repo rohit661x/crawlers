@@ -10,6 +10,8 @@ Python + Playwright crawlers for the `base` droplet.
 New crawler: copy `crawlers/example`, edit TARGETS/parse logic, then
 `systemctl --user enable --now crawler@<name>` for long-running, or a timer for scheduled.
 Proxy: set `PROXY_URL` in `.env`; per-crawler override by passing `proxy_url=` to `browser_context()`.
+Dependencies are pinned in `requirements.txt`; after bumping `playwright`, run `python -m playwright install chromium`
+(each Playwright release needs its own browser build).
 
 ## careers poller (`crawlers/careers/`)
 
