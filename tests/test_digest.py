@@ -143,16 +143,17 @@ def test_report_unsent_and_company(db, capsys):
 def test_report_send_marks_jobs_sent(db, monkeypatch, capsys):
     args, s = db
     texts = []
-    monkeypatch.setattr(notify, "send", lambda text: texts.append(text))
+    monkeypatch.setattr(notify, "send", lambda text, route: texts.append((route, text)))
     assert report.main(args + ["--unsent", "--send"]) == 0
     assert "Sent 2 of 2 jobs." in capsys.readouterr().out
-    assert "ML Intern" in texts[0] and "Quant Intern" in texts[0]
+    route, text = texts[0]
+    assert route == "findings" and "ML Intern" in text and "Quant Intern" in text
     s2 = Store(args[1])
     assert {r["job_id"] for r in s2.open_jobs(unsent=True)} == {"c"}  # only the non-match remains
 
 def test_report_send_over_limit_needs_yes(db, monkeypatch, capsys):
     args, _ = db
     monkeypatch.setattr(report, "SEND_CONFIRM_OVER", 1)
-    monkeypatch.setattr(notify, "send", lambda text: pytest.fail("must not send without --yes"))
+    monkeypatch.setattr(notify, "send", lambda text, route: pytest.fail("must not send without --yes"))
     assert report.main(args + ["--send"]) == 1
     assert "--yes" in capsys.readouterr().out

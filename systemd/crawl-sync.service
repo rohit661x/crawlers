@@ -5,3 +5,7 @@ OnFailure=notify-failure@%n.service
 [Service]
 Type=oneshot
 ExecStart=%h/projects/crawlers/sync.sh
+# dead-man switch: HEALTHCHECK_SYNC_URL in .env (unset = no ping)
+Environment=HEALTHCHECK_SYNC_URL=
+EnvironmentFile=-%h/projects/crawlers/.env
+ExecStopPost=%h/projects/crawlers/hc-ping.sh ${HEALTHCHECK_SYNC_URL}

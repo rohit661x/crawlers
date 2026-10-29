@@ -17,6 +17,20 @@ Dependencies are pinned in `requirements.txt`; after bumping `playwright`, run `
 
 Polls company job boards hourly and pings Telegram (via `hermes send`) about new jobs that pass the filters.
 
+Messages have two routes (set in `.env`, both default to `NOTIFY_TARGET`):
+- **findings** -> `NOTIFY_FINDINGS_TARGET`, a group chat everyone following the search is in: new jobs,
+  "now tracking" announcements, filter-change digests, `report --send`.
+- **ops** -> `NOTIFY_OPS_TARGET`, the owner: poller alerts (failing / empty / shrunk / recovered), the daily
+  health summary, `notify-failure` log tails.
+
+Group setup: add the hermes bot to the group and @mention it there (with Telegram's default privacy mode a bot
+only sees mentions and commands, and hermes lists a chat only once the gateway has had a message from it), then
+`hermes send --list telegram` shows the chat id; set `NOTIFY_FINDINGS_TARGET=telegram:<id>` (supergroups are
+`-100…`; a group upgraded to a supergroup gets a new id, and sends fail until you update it). The hermes
+gateway only answers `TELEGRAM_ALLOWED_USERS`, so other group members can't drive the agent. Sends are
+spaced 3.1 s apart (Telegram allows 20 messages/min in a group). If the group route fails, its messages
+stay queued, ops messages still go out, and the owner gets one ⚠️ message (and a ✅ once it delivers again).
+
 - `config.toml`  ~136 companies (`ats` = greenhouse | lever | ashby | smartrecruiters | workable | workday | amazon |
                  eightfold | google | apple | janestreet | meta | custom) and `[filters]`. Per-company options:
                  `searches`, `max_jobs`, `timeout` (slow boards, e.g. RBC = 600), `disabled`, a `[companies.filters]`
@@ -27,7 +41,7 @@ Polls company job boards hourly and pings Telegram (via `hermes send`) about new
 - events (`new`, `closed`, `error`) also go to `~/data/crawls/careers/<day>.jsonl`
 
 Matching jobs you haven't seen: `python -m crawlers.careers.report [--company NAME] [--days N] [--unsent] [--send]`
-lists every open job that passes the filters (`--send` queues them to Telegram). A newly tracked company's
+lists every open job that passes the filters (`--send` queues them to the findings group). A newly tracked company's
 announcement includes all its matching jobs (up to `[digest].baseline_max`), and after you edit `[filters]`
 the next run sends open jobs that match the new filters but didn't match the old ones (`refilter_max`).
 
@@ -54,8 +68,10 @@ outbox table: a failed send is retried next run (dropped after 24 failed runs) i
 
 Dead-man switches: each full run pings `HEALTHCHECK_URL` (e.g. a healthchecks.io check, period 1h, grace 2h),
 with `/fail` on a crash or when the outbox has been stuck for 3h; a crash also triggers
-`OnFailure=notify-failure@%n` (Telegram message with the log tail). `crawl-backup.timer` snapshots
+`OnFailure=notify-failure@%n` (Telegram message to the ops target with the log tail). `crawl-backup.timer` snapshots
 `careers.db` daily to `spaces:rohit-base/state/careers-<weekday>.db.gz` (7 days kept).
+`crawl-sync` and `crawl-backup` report to their own checks (`HEALTHCHECK_SYNC_URL`, `HEALTHCHECK_BACKUP_URL`)
+via `hc-ping.sh` in `ExecStopPost=`, so a sync or backup that silently stops running is caught too.
 
 Tests: `pip install -r requirements-dev.txt && python -m pytest`.
 Test without sending: `python -m crawlers.careers.main --dry-run [--only NAME]` (in-memory DB).

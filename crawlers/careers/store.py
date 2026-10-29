@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS outbox (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
+    route       TEXT NOT NULL DEFAULT 'ops',  -- notify.TARGETS key: 'findings' | 'ops'
     text        TEXT NOT NULL,
     jobs        TEXT,              -- JSON [[company, job_id], ...] marked 'sent' on delivery
     attempts    INTEGER NOT NULL DEFAULT 0,
@@ -81,6 +82,9 @@ class Store:
             self.db.execute("ALTER TABLE jobs ADD COLUMN missed INTEGER NOT NULL DEFAULT 0")
         if "title_guessed" not in job_cols:
             self.db.execute("ALTER TABLE jobs ADD COLUMN title_guessed INTEGER NOT NULL DEFAULT 0")
+        outbox_cols = {r[1] for r in self.db.execute("PRAGMA table_info(outbox)")}
+        if "route" not in outbox_cols:  # messages queued before routing went to the owner
+            self.db.execute("ALTER TABLE outbox ADD COLUMN route TEXT NOT NULL DEFAULT 'ops'")
 
     def sync(self, company: str, jobs: list[Job], complete: bool, now: str, allow_empty: bool = False,
              close_after: int = CLOSE_AFTER, present=()) -> dict:
@@ -170,13 +174,13 @@ class Store:
 
     # --- outbox ------------------------------------------------------------------
 
-    def enqueue(self, text: str, rows=(), now: str = ""):
+    def enqueue(self, text: str, rows=(), now: str = "", route: str = "ops"):
         """Queue a message; its job rows move to 'queued' in the same transaction, so they
         aren't picked up as pending again while the message waits."""
         jobs = [[r["company"], r["job_id"]] for r in rows]
         with self.db:
-            self.db.execute("INSERT INTO outbox (created_at, text, jobs) VALUES (?, ?, ?)",
-                            (now, text, json.dumps(jobs) if jobs else None))
+            self.db.execute("INSERT INTO outbox (created_at, route, text, jobs) VALUES (?, ?, ?, ?)",
+                            (now, route, text, json.dumps(jobs) if jobs else None))
             self.db.executemany("UPDATE jobs SET notify_state = 'queued' WHERE company = ? AND job_id = ?", jobs)
 
     def outbox(self) -> list[sqlite3.Row]:

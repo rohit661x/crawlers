@@ -24,8 +24,8 @@ def test_parse_verdict_all_bad_is_a_failure():
 def test_alerts_go_through_outbox(store):
     # transition() records the new state at once; the message must not be lost if sending fails
     msg = poller.transition(store, "Acme", "failing", fails=3, error="HTTP 500")
-    notify.post(store, msg, dry_run=False, now="t")
-    assert [m["text"] for m in store.outbox()] == [msg]
+    notify.post(store, msg, route="ops", dry_run=False, now="t")
+    assert [(m["route"], m["text"]) for m in store.outbox()] == [("ops", msg)]
 
 @pytest.fixture
 def pings(monkeypatch):

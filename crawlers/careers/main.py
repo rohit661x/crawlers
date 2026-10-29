@@ -91,7 +91,7 @@ def notify_pending(store, global_filter, per_company, dry_run, now, hold_hours: 
     n = len(matched)
     for rows, msg in notify.chunk(f"🆕 {n} new job{'s' * (n != 1)}",
                                   [(r, notify.format_job(r)) for r in matched]):
-        notify.post(store, msg, rows, dry_run=dry_run, now=now)
+        notify.post(store, msg, rows, route="findings", dry_run=dry_run, now=now)
     return n
 
 def short_error(e: Exception) -> str:
@@ -249,7 +249,7 @@ def run(args):
 
     alerts = [a for a in alerts if a]
     for _, msg in notify.chunk("🚨 Poller alerts", [(None, a) for a in alerts]):
-        notify.post(store, msg, dry_run=args.dry_run, now=now)
+        notify.post(store, msg, route="ops", dry_run=args.dry_run, now=now)
     dcfg = cfg.get("digest", {})
     if baselines:
         digest.baselines(store, baselines, global_filter, per_company,
@@ -268,7 +268,8 @@ def run(args):
 
     health_cfg = cfg.get("health", {})
     if args.health or (not args.only and not args.dry_run and health.due(store, health_cfg, finished)):
-        notify.post(store, health.build(store, companies, health_cfg, finished), dry_run=args.dry_run, now=now)
+        notify.post(store, health.build(store, companies, health_cfg, finished), route="ops",
+                    dry_run=args.dry_run, now=now)
         if not args.dry_run:
             health.mark_sent(store, finished)  # queued; the outbox delivers it, now or next run
             notify.flush(store, now)
