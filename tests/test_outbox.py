@@ -1,5 +1,5 @@
 """Outbox: messages survive send failures and are retried next run instead of being lost."""
-import pytest
+import httpx, pytest
 from crawlers.careers import notify
 from conftest import job
 
@@ -219,3 +219,66 @@ def test_emptied_queue_is_not_recovery(store, sender):
     sender.fail = set()
     notify.flush(store, NOW)
     assert not any("again" in t for _, t in sender.routed)
+
+TOKEN = "123456:SECRET-test-token"
+
+@pytest.fixture
+def bot_api(monkeypatch):
+    """Fake Bot API: records (url, payload); answers with `bot_api.reply` (status, json) or raises it."""
+    class Api:
+        calls, reply = [], (200, {"ok": True, "result": {"message_id": 1}})
+    def post(url, json, timeout):
+        Api.calls.append((url, json))
+        if isinstance(Api.reply, Exception):
+            raise Api.reply
+        status, body = Api.reply
+        return httpx.Response(status, json=body)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", TOKEN)
+    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "8093975156")
+    monkeypatch.setattr(notify.httpx, "post", post)
+    Api.calls = []
+    return Api
+
+def test_sends_plain_text_to_home_channel_and_explicit_chats(bot_api):
+    assert notify._send_once("hi *there*", "telegram") == (True, "")
+    assert notify._send_once("hi", "telegram:-1003936325725") == (True, "")
+    assert notify._send_once("hi", "telegram:-1001:17") == (True, "")
+    (url, first), (_, second), (_, third) = bot_api.calls
+    assert url == f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    assert first == {"chat_id": "8093975156", "text": "hi *there*"}  # no parse_mode: sent verbatim
+    assert second["chat_id"] == "-1003936325725" and third["message_thread_id"] == 17
+
+def test_429_reply_feeds_retry_after(bot_api):
+    bot_api.reply = (429, {"ok": False, "error_code": 429, "description": "Too Many Requests: retry after 12",
+                           "parameters": {"retry_after": 12}})
+    ok, err = notify._send_once("x", "telegram")
+    assert not ok and notify.retry_after(err) == 12
+
+def test_errors_never_leak_the_token(bot_api):
+    bot_api.reply = httpx.ConnectError(f"failed: https://api.telegram.org/bot{TOKEN}/sendMessage")
+    ok, err = notify._send_once("x", "telegram")
+    assert not ok and TOKEN not in err and "<token>" in err
+
+def test_rejected_post_reports_telegram_reason(bot_api):
+    bot_api.reply = (403, {"ok": False, "error_code": 403, "description": "Forbidden: bot is not a member of the channel chat"})
+    ok, err = notify._send_once("x", "telegram:-1003936325725")
+    assert not ok and "not a member" in err and "403" in err
+
+def test_unsupported_or_missing_target(bot_api, monkeypatch):
+    assert "unsupported target" in notify._send_once("x", "discord:#ops")[1]
+    monkeypatch.delenv("TELEGRAM_HOME_CHANNEL")
+    monkeypatch.setattr(notify, "HERMES_ENV", notify.Path("/nonexistent/.env"))
+    assert "no chat id" in notify._send_once("x", "telegram")[1]
+    assert bot_api.calls == []
+
+def test_token_read_from_hermes_env(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text('OTHER=1\nTELEGRAM_BOT_TOKEN="abc:def"\n')
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setattr(notify, "HERMES_ENV", env)
+    assert notify._hermes_env("TELEGRAM_BOT_TOKEN") == "abc:def"
+
+def test_titles_go_out_verbatim():
+    row = {"company": "Acme", "title": "C_Sharp [Backend]   Intern", "location": "Toronto", "remote": 0,
+           "url": "https://example.com/1"}
+    assert notify.format_job(row).splitlines()[0] == "Acme — C_Sharp [Backend] Intern"

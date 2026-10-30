@@ -15,7 +15,9 @@ Dependencies are pinned in `requirements.txt`; after bumping `playwright`, run `
 
 ## careers poller (`crawlers/careers/`)
 
-Polls company job boards hourly and pings Telegram (via `hermes send`) about new jobs that pass the filters.
+Polls company job boards hourly and pings Telegram about new jobs that pass the filters. It posts through the
+Bot API with the hermes bot's token (read from `~/.hermes/.env`), not `hermes send`, which would also copy every
+alert into the owner's Hermes conversation and make each later DM to Hermes re-read all of them.
 
 Messages have two routes, each with a list of destinations (hermes targets, set in `.env`):
 - **jobs** -> `NOTIFY_JOBS_TARGETS` (comma-separated, e.g. `telegram,telegram:-1003936325725`: the owner's DM

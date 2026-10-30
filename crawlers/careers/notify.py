@@ -1,38 +1,65 @@
-"""Telegram via `hermes send` (reuses the gateway's bot token; gateway needn't be running).
+"""Telegram via the Bot API, with the hermes bot's token (one token, rotated in one place).
+Not `hermes send`: that also copies every message into the owner's Hermes conversation, so each
+later DM to Hermes would re-read every alert ever sent (119k input tokens for one "ping").
 
 Messages aren't sent directly: callers queue them in the store's outbox and flush() delivers
-them, so a Telegram/hermes outage delays messages instead of losing them.
+them, so a Telegram outage delays messages instead of losing them.
 
-Each message has a route, and each route a list of destinations (hermes targets):
+Each message has a route, and each route a list of destinations (targets like "telegram:<chat_id>"):
 - "jobs": the new-jobs summary, to every NOTIFY_JOBS_TARGETS destination (the owner's DM and the
   alerts channel; later, per-subscriber chats).
 - "ops": everything only the owner should see (poller alerts, health summary, digests, reports).
 post() queues one outbox row per destination, so each destination retries, fails and recovers
 on its own: a broken channel never holds up the DM, and vice versa."""
-import json, logging, os, re, shutil, subprocess, time
+import logging, os, re, time
 from pathlib import Path
+import httpx
 
 log = logging.getLogger("careers.notify")
 
-HERMES_BIN = os.getenv("HERMES_BIN") or shutil.which("hermes") or str(Path.home() / ".local/bin/hermes")
-NOTIFY_TARGET = os.getenv("NOTIFY_TARGET", "telegram")  # hermes target: telegram = its home channel
+NOTIFY_TARGET = os.getenv("NOTIFY_TARGET", "telegram")  # target: "telegram" = the owner's DM (hermes' home channel)
+HERMES_ENV = Path(os.getenv("HERMES_ENV") or Path.home() / ".hermes/.env")
+TELEGRAM_API = "https://api.telegram.org"
+
+def _hermes_env(key: str) -> str:
+    """Our own environment first, then hermes' .env (where the bot token and home channel live)."""
+    if value := os.getenv(key):
+        return value
+    try:
+        for line in HERMES_ENV.read_text().splitlines():
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return ""
+
+def _resolve(target: str) -> tuple[str, int | None]:
+    """"telegram" -> the home channel; "telegram:<chat_id>[:<thread_id>]" -> that chat (and topic)."""
+    platform, _, rest = target.partition(":")
+    if platform != "telegram":
+        raise ValueError(f"unsupported target {target!r}: only telegram[:<chat_id>[:<thread_id>]]")
+    chat, _, thread = rest.partition(":")
+    chat = chat or _hermes_env("TELEGRAM_HOME_CHANNEL")
+    if not chat:
+        raise ValueError("no chat id: set TELEGRAM_HOME_CHANNEL or use telegram:<chat_id>")
+    return chat, int(thread) if thread else None
 
 def _targets(var: str) -> list[str]:
-    """Comma-separated hermes targets from `var`, e.g. "telegram,telegram:-1001234567890"."""
+    """Comma-separated targets from `var`, e.g. "telegram,telegram:-1001234567890"."""
     return [t.strip() for t in os.getenv(var, "").split(",") if t.strip()] or [NOTIFY_TARGET]
 
 TARGETS = {  # route -> destinations
     "jobs": _targets("NOTIFY_JOBS_TARGETS"),
     "ops": _targets("NOTIFY_OPS_TARGET"),
 }
-MAX_CHARS = 3500  # Telegram caps at 4096; leave room for hermes' markdown escaping
+MAX_CHARS = 3500  # Telegram caps a message at 4096 characters
 
 SEND_GAP_S = 3.1             # Telegram flood control: groups/channels allow 20 msgs/min
 RETRY_DELAYS_S = (5, 20)
 MAX_RETRY_AFTER_S = 120      # longer Telegram flood penalties wait for the next run instead
 MAX_ATTEMPTS = 24            # runs a message may fail in before it's dropped (~1 day hourly)
 _last_send = 0.0
-# hermes reports a flood wait as "flood_control:37.0" or Telegram's "Retry in 37 seconds"
+# a flood wait: "retry_after=37" (ours), "Too Many Requests: retry after 37" (Telegram), "flood_control:37"
 _RETRY_AFTER = re.compile(r"(?:flood_control:|retry[ _-]?after\D{0,3}|retry in )(\d+(?:\.\d+)?)", re.I)
 
 def retry_after(err: str) -> float | None:
@@ -41,18 +68,26 @@ def retry_after(err: str) -> float | None:
     return float(m.group(1)) if m else None
 
 def _send_once(text: str, target: str) -> tuple[bool, str]:
+    """One sendMessage call, as plain text (no parse mode: titles can't break formatting).
+    Errors never contain the token; a 429's retry_after is kept for send()."""
+    token = _hermes_env("TELEGRAM_BOT_TOKEN")
     try:
-        p = subprocess.run([HERMES_BIN, "send", "--to", target, "--json"],
-                           input=text, text=True, capture_output=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, repr(e)
-    if p.returncode == 0:
-        return True, ""
-    try:  # --json puts the real reason in the payload; --quiet would swallow it
-        err = json.loads(p.stdout).get("error") or p.stdout
+        chat, thread = _resolve(target)
+        if not token:
+            return False, f"no TELEGRAM_BOT_TOKEN (environment or {HERMES_ENV})"
+        payload = {"chat_id": chat, "text": text, **({"message_thread_id": thread} if thread is not None else {})}
+        r = httpx.post(f"{TELEGRAM_API}/bot{token}/sendMessage", json=payload, timeout=30)
+    except (ValueError, httpx.HTTPError) as e:
+        err = f"{type(e).__name__}: {e}"
+        return False, (err.replace(token, "<token>") if token else err)[:500]
+    try:
+        reply = r.json()
     except ValueError:
-        err = p.stderr or p.stdout
-    return False, f"exit {p.returncode}: {str(err).strip()[:500]}"
+        return False, f"HTTP {r.status_code}: non-JSON reply"
+    if reply.get("ok"):
+        return True, ""
+    wait = (reply.get("parameters") or {}).get("retry_after")
+    return False, f"HTTP {r.status_code}: {reply.get('description', '')[:400]}" + (f" (retry_after={wait})" if wait else "")
 
 def send(text: str, target: str) -> str | None:
     """Send to one destination with retries; a 429 waits as long as Telegram asks (up to
@@ -65,7 +100,7 @@ def send(text: str, target: str) -> str | None:
         _last_send = time.monotonic()
         if ok:
             return None
-        log.warning("hermes send to %s failed (attempt %d/%d): %s",
+        log.warning("send to %s failed (attempt %d/%d): %s",
                     target, attempt + 1, 1 + len(RETRY_DELAYS_S), err)
         if attempt == len(RETRY_DELAYS_S):
             break
@@ -88,7 +123,7 @@ def post(store, text: str, rows=(), *, route: str, dry_run: bool, now: str):
             store.enqueue(text, [r for r in rows if r is not None], now, route=route, target=target)
 
 def flush(store, now: str, max_attempts: int = MAX_ATTEMPTS) -> int:
-    """Deliver queued messages. A destination stops at its first failure (Telegram, hermes or
+    """Deliver queued messages. A destination stops at its first failure (Telegram or
     that chat is probably unavailable; the rest stay queued for the next run), but the others
     carry on. A message that has failed in max_attempts runs is dropped with an error log, so
     one bad message can't retry forever. Returns the number of jobs delivered."""
@@ -136,8 +171,8 @@ def _destination_alerts(store, down: dict, up: set, now: str):
                 store.enqueue(text, now=now, route="ops", target=ops_target)
 
 def _clean(s: str | None) -> str:
-    # hermes renders the body as markdown; keep stray markup in titles from mangling it
-    return re.sub(r"[*_`\[\]]", " ", s or "").strip()
+    # messages go out as plain text, so titles need no escaping; just tidy whitespace
+    return " ".join((s or "").split())
 
 def format_job(j) -> str:
     where = [_clean(j["location"])] if j["location"] else []
