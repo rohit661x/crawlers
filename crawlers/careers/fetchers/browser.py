@@ -1,6 +1,6 @@
 """Playwright fetchers: take a browser context instead of an httpx client."""
-import asyncio
-from urllib.parse import urljoin
+import asyncio, re
+from urllib.parse import urljoin, urlparse
 from .base import Job, FetchResult, RecordGuard, remote_hint, searches, dedup
 
 META_RETRY_STATUS = {429, 500, 502, 503, 504}
@@ -54,18 +54,37 @@ async def meta(ctx, co) -> FetchResult:
                 ))
     return guard.result(dedup(jobs))
 
+_SLUG_ID = re.compile(r"[_-]+[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$|_[^_]*\d[^_]*$", re.I)
+
+def slug_title(url: str) -> str:
+    """Title from a job URL's last segment, minus its id: .../applied-ml-engineers_9f16f862-...
+    -> "Applied Ml Engineers". Only a fallback; the job is marked title_guessed."""
+    slug = _SLUG_ID.sub("", urlparse(url).path.rstrip("/").rsplit("/", 1)[-1])
+    return " ".join(w.capitalize() for w in re.split(r"[-_\s]+", slug) if w)
+
+# A job link's title: title_selector, else the element its aria-labelledby names, else its first
+# heading, else its first line. Location: location_selector, else aria-describedby. Page redesigns
+# drop tags and classes (Shopify went h4 -> h3, lost .location); accessible names tend to survive.
+_LINKS_JS = """(els, [ts, ls]) => els.map(e => {
+    const text = n => n ? (n.innerText || '').trim() : '';
+    const pick = s => s ? text(e.querySelector(s)) : '';
+    const ref = a => (e.getAttribute(a) || '').split(/\\s+/).map(id => text(id && document.getElementById(id)))
+                                                .filter(Boolean).join(' ');
+    const title = pick(ts) || ref('aria-labelledby') || text(e.querySelector('h1,h2,h3,h4,h5,h6'))
+                  || (e.innerText || '').trim().split('\\n')[0];
+    return [e.getAttribute('href'), title, pick(ls) || ref('aria-describedby')];
+})"""
+
 async def custom(ctx, co) -> FetchResult:
-    """Self-hosted career pages: every element matching link_selector is a job link.
-    Optional title_selector / location_selector are looked up inside each link;
-    without them the link text is the title."""
+    """Self-hosted career pages: every element matching link_selector is a job link. Title and
+    location come from optional title_selector / location_selector inside each link, falling
+    back as in _LINKS_JS, and finally to a title guessed from the URL slug."""
     page = await ctx.new_page()
     try:
         await page.goto(co["url"], wait_until="domcontentloaded")
         await page.wait_for_selector(co.get("wait_selector") or co["link_selector"], timeout=20000)
-        links = await page.eval_on_selector_all(co["link_selector"], """(els, [ts, ls]) => els.map(e => {
-            const pick = s => s ? (e.querySelector(s)?.innerText ?? '') : null;
-            return [e.getAttribute('href'), pick(ts) ?? e.innerText, pick(ls) ?? ''];
-        })""", [co.get("title_selector"), co.get("location_selector")])
+        links = await page.eval_on_selector_all(co["link_selector"], _LINKS_JS,
+                                                [co.get("title_selector"), co.get("location_selector")])
     finally:
         await page.close()
     jobs, guard = [], RecordGuard()
@@ -75,6 +94,8 @@ async def custom(ctx, co) -> FetchResult:
                 continue
             url = urljoin(co["url"], href)
             title, loc = " ".join((title or "").split()), " ".join((loc or "").split())
+            guessed = not title
+            title = title or slug_title(url)
             jobs.append(Job(company=co["name"], ats="custom", job_id=url, title=title, url=url,
-                            location=loc, remote=remote_hint(title, loc)))
+                            location=loc, remote=remote_hint(title, loc), title_guessed=guessed))
     return guard.result(dedup(jobs))

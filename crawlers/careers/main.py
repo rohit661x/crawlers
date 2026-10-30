@@ -99,6 +99,21 @@ def short_error(e: Exception) -> str:
         return f"HTTP {e.response.status_code} from {e.request.url.host}"
     return f"{type(e).__name__}: {str(e)[:150]}"
 
+def blank_titles(res: FetchResult) -> FetchResult | Exception:
+    """A job without a title can't be matched against the filters: stored, it would be marked
+    'filtered' and never alert. Count blank titles as unparseable records (parse_verdict then
+    decides about closures). Mostly blank means the fetcher's parsing broke (the page changed),
+    so the run fails, and after fail_threshold runs the owner gets the 'failing' alert."""
+    blank = sum(1 for j in res.jobs if not j.title.strip())
+    if not blank:
+        return res
+    if blank * 2 > len(res.jobs):
+        return ValueError(f"{blank}/{len(res.jobs)} jobs have no title (page format changed?)")
+    res.jobs = [j for j in res.jobs if j.title.strip()]
+    res.skipped += blank
+    res.skip_error = res.skip_error or f"{blank} blank title(s)"
+    return res
+
 def parse_verdict(res: FetchResult, max_skip_ratio: float) -> tuple[Exception | None, bool, str]:
     """Judge a listing with skipped (malformed) records -> (error, complete, note).
     All records bad: the fetcher is broken, treat as a failure. More than max_skip_ratio bad:
@@ -187,6 +202,8 @@ def run(args):
     baselines, failures, new_jobs = [], 0, 0
     for co, res in results:
         name = co["name"]
+        if not isinstance(res, Exception):
+            res = blank_titles(res)
         if not isinstance(res, Exception) and res.skipped:
             err, res.complete, note = parse_verdict(res, max_skip_ratio)
             log.warning("%s: %s%s", name, note, "" if res.complete else "; closures skipped")

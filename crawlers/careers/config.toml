@@ -135,8 +135,7 @@ name = "Shopify"
 ats = "custom"
 url = "https://www.shopify.com/careers"
 link_selector = 'a[href^="/careers/"][href*="_"]'
-title_selector = "h4"
-location_selector = ".location"
+# no title/location selectors: each link's aria-labelledby / aria-describedby name them (h4/.location went away Oct 2026)
 
 [[companies]]
 name = "Stripe"
