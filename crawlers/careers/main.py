@@ -93,10 +93,11 @@ def notify_pending(store, global_filter, per_company, dry_run, now, hold_hours: 
     store.mark(filtered, "filtered", now)
     hit = [r for r in matched if hits and hits.matches(r)]
     rest = [r for r in matched if not (hits and hits.matches(r))]
-    for header, rows in ((f"🎯 HIT: {len(hit)} target role{'s' * (len(hit) != 1)} (intern · new grad · entry level)", hit),
-                         (f"🆕 {len(rest)} new job{'s' * (len(rest) != 1)}", rest)):
-        for chunk_rows, msg in notify.chunk(header, [(r, notify.format_job(r)) for r in rows]):
-            notify.post(store, msg, chunk_rows, route="jobs", dry_run=dry_run, now=now)
+    for chunk_rows, msg, options in notify.hit_messages(hit):  # first, so every destination gets HITs before the rest
+        notify.post(store, msg, chunk_rows, route="jobs", dry_run=dry_run, now=now, options=options)
+    for chunk_rows, msg in notify.chunk(f"🆕 {len(rest)} new job{'s' * (len(rest) != 1)}",
+                                        [(r, notify.format_job(r)) for r in rest]):
+        notify.post(store, msg, chunk_rows, route="jobs", dry_run=dry_run, now=now)
     return len(matched)
 
 def short_error(e: Exception) -> str:

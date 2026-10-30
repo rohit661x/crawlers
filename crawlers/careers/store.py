@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS outbox (
     target      TEXT,              -- hermes destination; one row per destination of the route
     text        TEXT NOT NULL,
     jobs        TEXT,              -- JSON [[company, job_id], ...] marked 'sent' on delivery
+    options     TEXT,              -- JSON sendMessage extras (parse_mode, buttons...); NULL = plain text
     attempts    INTEGER NOT NULL DEFAULT 0,
     last_error  TEXT
 );
@@ -88,6 +89,8 @@ class Store:
             self.db.execute("ALTER TABLE outbox ADD COLUMN route TEXT NOT NULL DEFAULT 'ops'")
         if "target" not in outbox_cols:  # NULL = the route's first destination (notify.flush)
             self.db.execute("ALTER TABLE outbox ADD COLUMN target TEXT")
+        if "options" not in outbox_cols:
+            self.db.execute("ALTER TABLE outbox ADD COLUMN options TEXT")
         # the old shared-group route; whatever it still holds goes to the owner, never a channel
         self.db.execute("UPDATE outbox SET route = 'ops' WHERE route = 'findings'")
 
@@ -179,13 +182,15 @@ class Store:
 
     # --- outbox ------------------------------------------------------------------
 
-    def enqueue(self, text: str, rows=(), now: str = "", route: str = "ops", target: str | None = None):
+    def enqueue(self, text: str, rows=(), now: str = "", route: str = "ops", target: str | None = None,
+                options: dict | None = None):
         """Queue a message; its job rows move to 'queued' in the same transaction, so they
         aren't picked up as pending again while the message waits."""
         jobs = [[r["company"], r["job_id"]] for r in rows]
         with self.db:
-            self.db.execute("INSERT INTO outbox (created_at, route, target, text, jobs) VALUES (?, ?, ?, ?, ?)",
-                            (now, route, target, text, json.dumps(jobs) if jobs else None))
+            self.db.execute("INSERT INTO outbox (created_at, route, target, text, jobs, options) VALUES (?, ?, ?, ?, ?, ?)",
+                            (now, route, target, text, json.dumps(jobs) if jobs else None,
+                             json.dumps(options) if options else None))
             self.db.executemany("UPDATE jobs SET notify_state = 'queued' WHERE company = ? AND job_id = ?", jobs)
 
     def outbox(self) -> list[sqlite3.Row]:

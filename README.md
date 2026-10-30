@@ -25,7 +25,9 @@ Messages have two routes, each with a list of destinations (hermes targets, set 
   messages only past Telegram's size limit, and nothing at all when nothing new matched.
   🎯 HITs: new matches that also pass the finer `[hits]` filter in `config.toml` (the target audience:
   internships/co-ops, bachelor's level, new grad / entry level; never PhD, MS, MBA, postdoc or residency)
-  go first, in their own "🎯 HIT" message; the 🆕 summary then lists only the rest. Remove `[hits]` to turn it off.
+  go first, in their own "🎯 HIT" message (bold, numbered, an "Apply ↗" link and an Apply button per job, no
+  link previews; if Telegram ever rejects the formatting it's resent as plain text with the buttons); the 🆕
+  summary then lists only the rest, as plain text like before. Remove `[hits]` to turn it off.
 - **ops** -> `NOTIFY_OPS_TARGET`, the owner only: poller alerts (failing / empty / shrunk / recovered), the daily
   health summary, "now tracking" and filter-change digests, `report --send`, `notify-failure` log tails.
 Both default to `NOTIFY_TARGET` (`telegram` = hermes' home channel, the owner's DM).

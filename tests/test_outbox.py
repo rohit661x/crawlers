@@ -12,7 +12,7 @@ def sender(monkeypatch):
     """Fake hermes: records (target, text) in `routed`; fails for any text or target in `fail`.
     Destinations: jobs -> the owner's DM and a channel, ops -> the DM only."""
     class Sender:
-        def __call__(self, text, target):
+        def __call__(self, text, target, options=None):
             if {text, target, "*"} & self.fail:
                 return "exit 1: telegram down"
             self.sent.append(text)
@@ -144,7 +144,7 @@ def test_retry_after_parsing(err, wait):
 def fake_hermes(monkeypatch):
     """_send_once replays `replies`; sleeps are recorded, not slept."""
     calls, sleeps = [], []
-    def once(text, target):
+    def once(text, target, options=None):
         calls.append(target)
         return fake_hermes.replies.pop(0)
     fake_hermes = type("F", (), {"calls": calls, "sleeps": sleeps, "replies": []})
@@ -282,3 +282,30 @@ def test_titles_go_out_verbatim():
     row = {"company": "Acme", "title": "C_Sharp [Backend]   Intern", "location": "Toronto", "remote": 0,
            "url": "https://example.com/1"}
     assert notify.format_job(row).splitlines()[0] == "Acme — C_Sharp [Backend] Intern"
+
+def test_options_reach_telegram(bot_api):
+    opts = {"parse_mode": "HTML", "reply_markup": {"inline_keyboard": [[{"text": "Apply", "url": "https://x.test"}]]}}
+    assert notify._send_once("<b>hi</b>", "telegram", opts) == (True, "")
+    _, payload = bot_api.calls[0]
+    assert payload["parse_mode"] == "HTML" and payload["reply_markup"] == opts["reply_markup"]
+
+def test_unparseable_formatting_falls_back_to_plain_text_keeping_buttons(bot_api, monkeypatch):
+    replies = [(400, {"ok": False, "error_code": 400, "description": "Bad Request: can't parse entities: unsupported tag"}),
+               (200, {"ok": True, "result": {}})]
+    def post(url, json, timeout):
+        bot_api.calls.append((url, json)); status, body = replies.pop(0)
+        return httpx.Response(status, json=body)
+    monkeypatch.setattr(notify.httpx, "post", post)
+    opts = {"parse_mode": "HTML", "reply_markup": {"inline_keyboard": []}}
+    assert notify._send_once("<b>R&amp;D</b> <oops>", "telegram", opts) == (True, "")
+    (_, first), (_, second) = bot_api.calls
+    assert first["parse_mode"] == "HTML" and "parse_mode" not in second
+    assert second["text"] == "R&D " and "reply_markup" in second
+
+def test_queued_options_survive_the_outbox(store, sender, monkeypatch):
+    seen = []
+    monkeypatch.setattr(notify, "send", lambda text, target, options=None: seen.append(options))
+    notify.post(store, "<b>x</b>", route="jobs", dry_run=False, now=NOW, options={"parse_mode": "HTML"})
+    notify.post(store, "plain", route="ops", dry_run=False, now=NOW)
+    notify.flush(store, NOW)
+    assert {"parse_mode": "HTML"} in seen and None in seen

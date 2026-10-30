@@ -11,7 +11,7 @@ Each message has a route, and each route a list of destinations (targets like "t
 - "ops": everything only the owner should see (poller alerts, health summary, digests, reports).
 post() queues one outbox row per destination, so each destination retries, fails and recovers
 on its own: a broken channel never holds up the DM, and vice versa."""
-import logging, os, re, time
+import html, json, logging, os, re, time
 from pathlib import Path
 import httpx
 
@@ -67,16 +67,26 @@ def retry_after(err: str) -> float | None:
     m = _RETRY_AFTER.search(err or "")
     return float(m.group(1)) if m else None
 
-def _send_once(text: str, target: str) -> tuple[bool, str]:
-    """One sendMessage call, as plain text (no parse mode: titles can't break formatting).
+def _plain(text: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+def _send_once(text: str, target: str, options: dict | None = None) -> tuple[bool, str]:
+    """One sendMessage call: plain text unless `options` (sendMessage extras: parse_mode,
+    reply_markup, ...) says otherwise. If Telegram can't parse the formatting, it's sent once
+    more as plain text (buttons kept), so a formatting slip never loses a message.
     Errors never contain the token; a 429's retry_after is kept for send()."""
     token = _hermes_env("TELEGRAM_BOT_TOKEN")
     try:
         chat, thread = _resolve(target)
         if not token:
             return False, f"no TELEGRAM_BOT_TOKEN (environment or {HERMES_ENV})"
-        payload = {"chat_id": chat, "text": text, **({"message_thread_id": thread} if thread is not None else {})}
+        payload = {"chat_id": chat, "text": text, **({"message_thread_id": thread} if thread is not None else {}),
+                   **(options or {})}
         r = httpx.post(f"{TELEGRAM_API}/bot{token}/sendMessage", json=payload, timeout=30)
+        if r.status_code == 400 and "parse_mode" in payload and "can't parse entities" in r.text:
+            log.warning("%s: Telegram rejected the formatting; sending as plain text", target)
+            payload = {k: v for k, v in payload.items() if k != "parse_mode"} | {"text": _plain(text)}
+            r = httpx.post(f"{TELEGRAM_API}/bot{token}/sendMessage", json=payload, timeout=30)
     except (ValueError, httpx.HTTPError) as e:
         err = f"{type(e).__name__}: {e}"
         return False, (err.replace(token, "<token>") if token else err)[:500]
@@ -89,14 +99,14 @@ def _send_once(text: str, target: str) -> tuple[bool, str]:
     wait = (reply.get("parameters") or {}).get("retry_after")
     return False, f"HTTP {r.status_code}: {reply.get('description', '')[:400]}" + (f" (retry_after={wait})" if wait else "")
 
-def send(text: str, target: str) -> str | None:
+def send(text: str, target: str, options: dict | None = None) -> str | None:
     """Send to one destination with retries; a 429 waits as long as Telegram asks (up to
     MAX_RETRY_AFTER_S; a longer penalty gives up so the message waits for the next run).
     Returns None on success, else the last error."""
     global _last_send
     for attempt in range(1 + len(RETRY_DELAYS_S)):
         time.sleep(max(_last_send + SEND_GAP_S - time.monotonic(), 0))
-        ok, err = _send_once(text, target)
+        ok, err = _send_once(text, target, options)
         _last_send = time.monotonic()
         if ok:
             return None
@@ -111,7 +121,7 @@ def send(text: str, target: str) -> str | None:
         time.sleep(wait if wait is not None else RETRY_DELAYS_S[attempt])
     return err
 
-def post(store, text: str, rows=(), *, route: str, dry_run: bool, now: str):
+def post(store, text: str, rows=(), *, route: str, dry_run: bool, now: str, options: dict | None = None):
     """Queue a message for every destination of `route` (dry run: print it, queue nothing).
     `rows` are the jobs it carries (None entries, e.g. header lines from chunk(), are ignored)."""
     if route not in TARGETS:
@@ -120,7 +130,7 @@ def post(store, text: str, rows=(), *, route: str, dry_run: bool, now: str):
         if dry_run:
             print(f"[{route} -> {target}]\n{text}", end="\n\n")
         else:
-            store.enqueue(text, [r for r in rows if r is not None], now, route=route, target=target)
+            store.enqueue(text, [r for r in rows if r is not None], now, route=route, target=target, options=options)
 
 def flush(store, now: str, max_attempts: int = MAX_ATTEMPTS) -> int:
     """Deliver queued messages. A destination stops at its first failure (Telegram or
@@ -132,7 +142,7 @@ def flush(store, now: str, max_attempts: int = MAX_ATTEMPTS) -> int:
         target = msg["target"] or TARGETS[msg["route"]][0]  # rows queued before per-destination rows
         if target in down:
             continue
-        err = send(msg["text"], target)
+        err = send(msg["text"], target, json.loads(msg["options"]) if msg["options"] else None)
         if err is None:
             sent += store.delivered(msg, now)
             up.add(target)
@@ -195,4 +205,30 @@ def chunk(header: str, items: list[tuple[object, str]]) -> list[tuple[list, str]
         body += "\n\n" + text
     if rows:
         out.append((rows, body))
+    return out
+
+HIT_TAGLINE = "intern · new grad · entry level"
+
+def _where(j) -> str:
+    where = [_clean(j["location"])] if j["location"] else []
+    if j["remote"] and "remote" not in (j["location"] or "").lower():
+        where.append("Remote")
+    return " · ".join(dict.fromkeys(where))
+
+def hit_messages(rows) -> list[tuple[list, str, dict]]:
+    """🎯 HIT messages (style B): bold HTML, numbered jobs, an Apply link and an Apply button per
+    job, no link previews. Returns [(rows, html_text, sendMessage options)], split like chunk()."""
+    n, e = len(rows), html.escape
+    number = {id(r): i for i, r in enumerate(rows, 1)}
+    items = []
+    for r in rows:
+        where = _where(r)
+        items.append((r, f"{number[id(r)]}. <b>{e(_clean(r['company']))}</b> — {e(_clean(r['title']))}\n"
+                         + (f"📍 {e(where)} · " if where else "") + f'<a href="{e(r["url"])}">Apply ↗</a>'))
+    header = f"<b>🎯 HIT · {n} target role{'s' * (n != 1)}</b>\n<i>{HIT_TAGLINE}</i>"
+    out = []
+    for chunk_rows, text in chunk(header, items):
+        buttons = [[{"text": f"Apply {number[id(r)]} · {_clean(r['company'])}"[:60], "url": r["url"]}] for r in chunk_rows]
+        out.append((chunk_rows, text, {"parse_mode": "HTML", "link_preview_options": {"is_disabled": True},
+                                       "reply_markup": {"inline_keyboard": buttons}}))
     return out
