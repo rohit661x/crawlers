@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS outbox (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at  TEXT NOT NULL,
-    route       TEXT NOT NULL DEFAULT 'ops',  -- notify.TARGETS key: 'findings' | 'ops'
+    route       TEXT NOT NULL DEFAULT 'ops',  -- notify.TARGETS key: 'jobs' | 'ops'
+    target      TEXT,              -- hermes destination; one row per destination of the route
     text        TEXT NOT NULL,
     jobs        TEXT,              -- JSON [[company, job_id], ...] marked 'sent' on delivery
     attempts    INTEGER NOT NULL DEFAULT 0,
@@ -85,6 +86,10 @@ class Store:
         outbox_cols = {r[1] for r in self.db.execute("PRAGMA table_info(outbox)")}
         if "route" not in outbox_cols:  # messages queued before routing went to the owner
             self.db.execute("ALTER TABLE outbox ADD COLUMN route TEXT NOT NULL DEFAULT 'ops'")
+        if "target" not in outbox_cols:  # NULL = the route's first destination (notify.flush)
+            self.db.execute("ALTER TABLE outbox ADD COLUMN target TEXT")
+        # the old shared-group route; whatever it still holds goes to the owner, never a channel
+        self.db.execute("UPDATE outbox SET route = 'ops' WHERE route = 'findings'")
 
     def sync(self, company: str, jobs: list[Job], complete: bool, now: str, allow_empty: bool = False,
              close_after: int = CLOSE_AFTER, present=()) -> dict:
@@ -174,13 +179,13 @@ class Store:
 
     # --- outbox ------------------------------------------------------------------
 
-    def enqueue(self, text: str, rows=(), now: str = "", route: str = "ops"):
+    def enqueue(self, text: str, rows=(), now: str = "", route: str = "ops", target: str | None = None):
         """Queue a message; its job rows move to 'queued' in the same transaction, so they
         aren't picked up as pending again while the message waits."""
         jobs = [[r["company"], r["job_id"]] for r in rows]
         with self.db:
-            self.db.execute("INSERT INTO outbox (created_at, route, text, jobs) VALUES (?, ?, ?, ?)",
-                            (now, route, text, json.dumps(jobs) if jobs else None))
+            self.db.execute("INSERT INTO outbox (created_at, route, target, text, jobs) VALUES (?, ?, ?, ?, ?)",
+                            (now, route, target, text, json.dumps(jobs) if jobs else None))
             self.db.executemany("UPDATE jobs SET notify_state = 'queued' WHERE company = ? AND job_id = ?", jobs)
 
     def outbox(self) -> list[sqlite3.Row]:
@@ -189,13 +194,17 @@ class Store:
         return self.db.execute("SELECT * FROM outbox ORDER BY attempts, id").fetchall()
 
     def _finish(self, msg, state: str, now: str) -> int:
+        """Remove a message and settle its jobs. A job goes out to several destinations, so
+        'sent' is final: the first delivery sets it, and a later delivery or a copy dropped
+        elsewhere doesn't change it. Returns how many jobs changed state."""
         jobs = json.loads(msg["jobs"]) if msg["jobs"] else []
         with self.db:
             self.db.execute("DELETE FROM outbox WHERE id = ?", (msg["id"],))
-            self.db.executemany(
-                "UPDATE jobs SET notify_state = ?, notified_at = ? WHERE company = ? AND job_id = ?",
+            cur = self.db.executemany(
+                "UPDATE jobs SET notify_state = ?, notified_at = ? WHERE company = ? AND job_id = ?"
+                " AND COALESCE(notify_state, '') != 'sent'",
                 [(state, now, c, j) for c, j in jobs])
-        return len(jobs)
+        return cur.rowcount if jobs else 0
 
     def delivered(self, msg, now: str) -> int:
         """Remove a sent message and mark its jobs 'sent'; returns how many jobs it carried."""

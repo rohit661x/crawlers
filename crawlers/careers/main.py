@@ -91,7 +91,7 @@ def notify_pending(store, global_filter, per_company, dry_run, now, hold_hours: 
     n = len(matched)
     for rows, msg in notify.chunk(f"🆕 {n} new job{'s' * (n != 1)}",
                                   [(r, notify.format_job(r)) for r in matched]):
-        notify.post(store, msg, rows, route="findings", dry_run=dry_run, now=now)
+        notify.post(store, msg, rows, route="jobs", dry_run=dry_run, now=now)
     return n
 
 def short_error(e: Exception) -> str:

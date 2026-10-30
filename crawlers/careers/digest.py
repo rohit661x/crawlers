@@ -50,7 +50,7 @@ def baselines(store, baselines, global_filter, per_company, *, cap: int, dry_run
         items.append((None, f"No current matches ({len(quiet)}): " + ", ".join(sorted(c["name"] for c, _, _ in quiet))))
     n = len(baselines)
     for rows, msg in notify.chunk(f"📋 Now tracking {n} new compan{'ies' if n != 1 else 'y'}", items):
-        notify.post(store, msg, rows, route="findings", dry_run=dry_run, now=now)
+        notify.post(store, msg, rows, route="ops", dry_run=dry_run, now=now)
 
 def refilter(store, cfg: dict, global_filter, per_company, *, cap: int, dry_run: bool, now: str) -> int:
     """When the filters changed since the last run, send open, never-sent jobs that match the
@@ -69,7 +69,7 @@ def refilter(store, cfg: dict, global_filter, per_company, *, cap: int, dry_run:
         n = len(hits)
         header = f"🔎 Filters changed: {n} open job{'s' * (n != 1)} now match{'es' * (n == 1)}"
         for rows, msg in notify.chunk(header, job_items(hits, cap, f"{REPORT_CMD} --unsent")):
-            notify.post(store, msg, rows, route="findings", dry_run=dry_run, now=now)
+            notify.post(store, msg, rows, route="ops", dry_run=dry_run, now=now)
     if not dry_run:
         store.set("filter_spec", new_spec)
     return len(hits)

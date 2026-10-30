@@ -17,19 +17,23 @@ Dependencies are pinned in `requirements.txt`; after bumping `playwright`, run `
 
 Polls company job boards hourly and pings Telegram (via `hermes send`) about new jobs that pass the filters.
 
-Messages have two routes (set in `.env`, both default to `NOTIFY_TARGET`):
-- **findings** -> `NOTIFY_FINDINGS_TARGET`, a group chat everyone following the search is in: new jobs,
-  "now tracking" announcements, filter-change digests, `report --send`.
-- **ops** -> `NOTIFY_OPS_TARGET`, the owner: poller alerts (failing / empty / shrunk / recovered), the daily
-  health summary, `notify-failure` log tails.
+Messages have two routes, each with a list of destinations (hermes targets, set in `.env`):
+- **jobs** -> `NOTIFY_JOBS_TARGETS` (comma-separated, e.g. `telegram,telegram:-1003936325725`: the owner's DM
+  and the "Crawler Alerts" channel): one "🆕 N new jobs" summary per run per destination, split into a few
+  messages only past Telegram's size limit, and nothing at all when nothing new matched.
+- **ops** -> `NOTIFY_OPS_TARGET`, the owner only: poller alerts (failing / empty / shrunk / recovered), the daily
+  health summary, "now tracking" and filter-change digests, `report --send`, `notify-failure` log tails.
+Both default to `NOTIFY_TARGET` (`telegram` = hermes' home channel, the owner's DM).
 
-Group setup: add the hermes bot to the group and @mention it there (with Telegram's default privacy mode a bot
-only sees mentions and commands, and hermes lists a chat only once the gateway has had a message from it), then
-`hermes send --list telegram` shows the chat id; set `NOTIFY_FINDINGS_TARGET=telegram:<id>` (supergroups are
-`-100…`; a group upgraded to a supergroup gets a new id, and sends fail until you update it). The hermes
-gateway only answers `TELEGRAM_ALLOWED_USERS`, so other group members can't drive the agent. Sends are
-spaced 3.1 s apart (Telegram allows 20 messages/min in a group). If the group route fails, its messages
-stay queued, ops messages still go out, and the owner gets one ⚠️ message (and a ✅ once it delivers again).
+Every destination gets its own outbox row, so each retries, fails and recovers independently: a channel that
+rejects posts never holds up the DM, or the other way round, and the owner gets one ⚠️ message when a
+destination starts failing (and a ✅ once it delivers again). A job counts as sent once any destination has
+it. Sends are spaced 3.1 s apart (20 messages/min per group or channel), and a Telegram 429 waits the
+`retry_after` it asks for (up to 2 min; longer penalties leave the message queued for the next run).
+
+Adding a channel: make the bot an admin with only "Post Messages", check the id with the Bot API's `getChat`
+(channel ids are `-100…`), and append `telegram:<id>` to `NOTIFY_JOBS_TARGETS`. The bot needs no read access,
+so Telegram's privacy mode stays on.
 
 - `config.toml`  ~136 companies (`ats` = greenhouse | lever | ashby | smartrecruiters | workable | workday | amazon |
                  eightfold | google | apple | janestreet | meta | custom) and `[filters]`. Per-company options:
@@ -41,7 +45,7 @@ stay queued, ops messages still go out, and the owner gets one ⚠️ message (a
 - events (`new`, `closed`, `error`) also go to `~/data/crawls/careers/<day>.jsonl`
 
 Matching jobs you haven't seen: `python -m crawlers.careers.report [--company NAME] [--days N] [--unsent] [--send]`
-lists every open job that passes the filters (`--send` queues them to the findings group). A newly tracked company's
+lists every open job that passes the filters (`--send` queues them to the owner). A newly tracked company's
 announcement includes all its matching jobs (up to `[digest].baseline_max`), and after you edit `[filters]`
 the next run sends open jobs that match the new filters but didn't match the old ones (`refilter_max`).
 

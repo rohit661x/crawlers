@@ -51,7 +51,7 @@ def main(argv=None):
         n = len(rows)
         for chunk_rows, msg in notify.chunk(f"📋 {n} open matching job{'s' * (n != 1)}",
                                             [(r, notify.format_job(r)) for r in rows]):
-            notify.post(store, msg, chunk_rows, route="findings", dry_run=False, now=now.isoformat())
+            notify.post(store, msg, chunk_rows, route="ops", dry_run=False, now=now.isoformat())
         sent = notify.flush(store, now.isoformat())
         print(f"Sent {sent} of {n} jobs." + ("" if sent == n else " The rest stay queued; the next poll retries."))
         return 0

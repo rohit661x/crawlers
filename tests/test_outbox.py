@@ -5,18 +5,22 @@ from conftest import job
 
 NOW = "2026-10-06T12:00:00+00:00"
 
+DM, CHANNEL = "telegram", "telegram:-100123"
+
 @pytest.fixture
 def sender(monkeypatch):
-    """Fake hermes: records texts (and routes in `routed`); fails for any text or route in `fail`."""
+    """Fake hermes: records (target, text) in `routed`; fails for any text or target in `fail`.
+    Destinations: jobs -> the owner's DM and a channel, ops -> the DM only."""
     class Sender:
-        def __call__(self, text, route):
-            if {text, route, "*"} & self.fail:
+        def __call__(self, text, target):
+            if {text, target, "*"} & self.fail:
                 return "exit 1: telegram down"
             self.sent.append(text)
-            self.routed.append((route, text))
+            self.routed.append((target, text))
             return None
     s = Sender(); s.sent, s.routed, s.fail = [], [], set()
     monkeypatch.setattr(notify, "send", s)
+    monkeypatch.setattr(notify, "TARGETS", {"jobs": [DM, CHANNEL], "ops": [DM]})
     return s
 
 def pending_job(store, job_id):
@@ -71,76 +75,147 @@ def test_oldest_undelivered(store):
     store.enqueue("y", now="2026-10-06T05:00:00+00:00")
     assert store.oldest_undelivered() == "2026-10-06T01:00:00+00:00"
 
-def test_messages_keep_their_route(store, sender):
-    store.enqueue("new job", pending_job(store, "j1"), NOW, route="findings")
-    store.enqueue("alert", now=NOW, route="ops")
-    notify.flush(store, NOW)
-    assert sender.routed == [("findings", "new job"), ("ops", "alert")]
+def post_job(store, job_id="j1", text="🆕 1 new job"):
+    notify.post(store, text, pending_job(store, job_id), route="jobs", dry_run=False, now=NOW)
 
-def test_down_route_doesnt_block_others(store, sender):
-    # e.g. the bot was removed from the group: ops alerts still reach the owner
-    store.enqueue("job 1", now=NOW, route="findings")
-    store.enqueue("job 2", now=NOW, route="findings")
-    store.enqueue("alert", now=NOW, route="ops")
-    sender.fail = {"findings"}
+def test_jobs_fan_out_to_every_destination_ops_only_to_owner(store, sender):
+    post_job(store)
+    notify.post(store, "alert", route="ops", dry_run=False, now=NOW)
+    assert sorted((m["route"], m["target"]) for m in store.outbox()) == sorted([("jobs", CHANNEL), ("jobs", DM), ("ops", DM)])
+    assert notify.flush(store, NOW) == 1  # one job, counted once though it went to two places
+    assert sorted(sender.routed) == sorted([(DM, "🆕 1 new job"), (CHANNEL, "🆕 1 new job"), (DM, "alert")])
+    assert state(store, "j1") == "sent"
+
+def test_down_channel_doesnt_block_dm(store, sender):
+    # e.g. the bot was removed from the channel: the owner still gets jobs and alerts
+    post_job(store, "j1", "job 1")
+    post_job(store, "j2", "job 2")
+    sender.fail = {CHANNEL}
     notify.flush(store, NOW)
-    assert sender.routed[0] == ("ops", "alert") and all(r == "ops" for r, _ in sender.routed)
+    assert (DM, "job 1") in sender.routed and (DM, "job 2") in sender.routed
+    assert all(t == DM for t, _ in sender.routed)
     left = {m["text"]: m["attempts"] for m in store.outbox()}
-    assert left == {"job 1": 1, "job 2": 0}  # findings stopped at its first failure
+    assert left == {"job 1": 1, "job 2": 0}  # the channel stopped at its first failure
+    assert state(store, "j1") == "sent"
 
-def test_routes_resolve_to_targets(monkeypatch):
-    monkeypatch.setattr(notify, "TARGETS", {"findings": "telegram:-100123", "ops": "telegram"})
-    calls = []
-    monkeypatch.setattr(notify, "_send_once", lambda text, target: (calls.append(target), (True, ""))[1])
+def test_down_dm_doesnt_block_channel(store, sender):
+    post_job(store)
+    sender.fail = {DM}
+    notify.flush(store, NOW)
+    assert sender.routed == [(CHANNEL, "🆕 1 new job")]
+
+def test_sent_is_final_when_another_copy_is_dropped(store, sender):
+    post_job(store)
+    sender.fail = {CHANNEL}
+    notify.flush(store, NOW, max_attempts=1)  # DM delivered, channel copy dropped at once
+    assert state(store, "j1") == "sent" and store.outbox() == []
+
+def test_dropped_everywhere_is_dropped(store, sender):
+    post_job(store)
+    sender.fail = {"*"}
+    notify.flush(store, NOW, max_attempts=1)
+    assert state(store, "j1") == "dropped"
+
+def test_nothing_new_posts_nothing():
+    assert notify.chunk("🆕 0 new jobs", []) == []
+
+def test_long_summary_splits_into_few_messages_not_one_per_job():
+    items = [(n, "Acme — Software Engineer Intern\n📍 Toronto, ON\nhttps://example.com/" + "x" * 60) for n in range(80)]
+    msgs = notify.chunk("🆕 80 new jobs", items)
+    assert 1 < len(msgs) < 10 and all(len(m) <= notify.MAX_CHARS for _, m in msgs)
+    assert sum(len(rows) for rows, _ in msgs) == 80
+
+def test_targets_from_env(monkeypatch):
+    monkeypatch.setenv("NOTIFY_JOBS_TARGETS", " telegram , telegram:-100123,")
+    assert notify._targets("NOTIFY_JOBS_TARGETS") == ["telegram", "telegram:-100123"]
+    monkeypatch.delenv("NOTIFY_JOBS_TARGETS")
+    assert notify._targets("NOTIFY_JOBS_TARGETS") == [notify.NOTIFY_TARGET]
+
+@pytest.mark.parametrize("err, wait", [
+    ("exit 1: flood_control:37.0", 37.0),
+    ("exit 1: Too Many Requests: retry after 12", 12.0),
+    ("exit 1: Flood control exceeded. Retry in 5 seconds", 5.0),
+    ("exit 1: telegram down", None),
+])
+def test_retry_after_parsing(err, wait):
+    assert notify.retry_after(err) == wait
+
+@pytest.fixture
+def fake_hermes(monkeypatch):
+    """_send_once replays `replies`; sleeps are recorded, not slept."""
+    calls, sleeps = [], []
+    def once(text, target):
+        calls.append(target)
+        return fake_hermes.replies.pop(0)
+    fake_hermes = type("F", (), {"calls": calls, "sleeps": sleeps, "replies": []})
+    monkeypatch.setattr(notify, "_send_once", once)
+    monkeypatch.setattr(notify.time, "sleep", lambda s: sleeps.append(s))
     monkeypatch.setattr(notify, "SEND_GAP_S", 0)
-    assert notify.send("x", "findings") is None and notify.send("y", "ops") is None
-    assert calls == ["telegram:-100123", "telegram"]
-    assert "unknown route" in notify.send("z", "nope")
+    return fake_hermes
+
+def test_429_waits_as_long_as_telegram_asks(fake_hermes):
+    fake_hermes.replies = [(False, "exit 1: Flood control exceeded. Retry in 7 seconds"), (True, "")]
+    assert notify.send("x", CHANNEL) is None
+    assert fake_hermes.calls == [CHANNEL, CHANNEL] and 7.0 in fake_hermes.sleeps
+
+def test_long_429_penalty_waits_for_next_run(fake_hermes):
+    fake_hermes.replies = [(False, "exit 1: flood_control:3600")]
+    assert "flood_control" in notify.send("x", CHANNEL)
+    assert len(fake_hermes.calls) == 1 and max(fake_hermes.sleeps, default=0) < notify.MAX_RETRY_AFTER_S
 
 def test_post_rejects_unknown_route(store):
     with pytest.raises(ValueError):
-        notify.post(store, "x", route="group", dry_run=False, now=NOW)
+        notify.post(store, "x", route="findings", dry_run=False, now=NOW)
 
-def test_dry_run_shows_route(store, capsys):
-    notify.post(store, "hello", route="findings", dry_run=True, now=NOW)
-    assert capsys.readouterr().out.startswith(f"[findings -> {notify.TARGETS['findings']}]\nhello")
+def test_dry_run_shows_each_destination(store, sender, capsys):
+    notify.post(store, "hello", route="jobs", dry_run=True, now=NOW)
+    out = capsys.readouterr().out
+    assert f"[jobs -> {DM}]\nhello" in out and f"[jobs -> {CHANNEL}]\nhello" in out
     assert store.outbox() == []
 
-def test_old_outbox_rows_default_to_ops(tmp_path):
+def test_old_outbox_rows_go_to_the_owner(tmp_path, sender):
     import sqlite3
     from crawlers.careers.store import Store
     db = tmp_path / "old.db"
     old = sqlite3.connect(db)
     old.execute("CREATE TABLE outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,"
-                " text TEXT NOT NULL, jobs TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)")
+                " route TEXT NOT NULL DEFAULT 'ops', text TEXT NOT NULL, jobs TEXT,"
+                " attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)")
     old.execute("INSERT INTO outbox (created_at, text) VALUES (?, ?)", (NOW, "queued before routing"))
+    old.execute("INSERT INTO outbox (created_at, route, text) VALUES (?, 'findings', ?)", (NOW, "old group digest"))
     old.commit(); old.close()
-    assert [m["route"] for m in Store(db).outbox()] == ["ops"]
+    s = Store(db)
+    assert {m["route"] for m in s.outbox()} == {"ops"} and {m["target"] for m in s.outbox()} == {None}
+    notify.flush(s, NOW)
+    assert all(t == DM for t, _ in sender.routed)  # never the channel
 
-def test_failing_route_alerts_owner_once_then_recovery(store, sender):
-    store.enqueue("job 1", now=NOW, route="findings")
-    sender.fail = {"findings"}
+def test_failing_destination_alerts_owner_once_then_recovery(store, sender):
+    post_job(store)
+    sender.fail = {CHANNEL}
     notify.flush(store, NOW)
     notify.flush(store, NOW)  # still down: no second alert
-    alerts = [t for r, t in sender.routed if r == "ops"]
-    assert len(alerts) == 1 and "Can't deliver findings" in alerts[0] and "telegram down" in alerts[0]
+    alerts = [t for _, t in sender.routed if "Can't deliver" in t]
+    assert len(alerts) == 1 and CHANNEL in alerts[0] and "telegram down" in alerts[0]
+    assert all(t == DM for t, _ in sender.routed)
     sender.fail = set()
     notify.flush(store, NOW)
-    assert ("findings", "job 1") in sender.routed
-    assert sender.routed[-1][0] == "ops" and "again" in sender.routed[-1][1]
+    assert (CHANNEL, "🆕 1 new job") in sender.routed
+    assert sender.routed[-1][0] == DM and "again" in sender.routed[-1][1]
+    n = len(sender.routed)
     notify.flush(store, NOW)  # nothing new to say
-    assert len([r for r, _ in sender.routed if r == "ops"]) == 2
+    assert len(sender.routed) == n
 
-def test_route_alert_queued_when_ops_also_down(store, sender):
-    store.enqueue("job 1", now=NOW, route="findings")
+def test_destination_alert_queued_when_owner_also_down(store, sender):
+    post_job(store)
     sender.fail = {"*"}
     notify.flush(store, NOW)
-    assert [m["route"] for m in store.outbox() if "Can't deliver" in m["text"]] == ["ops"]
+    queued = [m for m in store.outbox() if "Can't deliver" in m["text"]]
+    assert [(m["route"], m["target"]) for m in queued] == [("ops", DM)]
 
 def test_emptied_queue_is_not_recovery(store, sender):
-    store.enqueue("job 1", now=NOW, route="findings")
-    sender.fail = {"findings"}
-    notify.flush(store, NOW, max_attempts=1)  # dropped on its first failure
+    post_job(store)
+    sender.fail = {CHANNEL}
+    notify.flush(store, NOW, max_attempts=1)  # channel copy dropped on its first failure
     sender.fail = set()
     notify.flush(store, NOW)
     assert not any("again" in t for _, t in sender.routed)
