@@ -24,7 +24,7 @@ from common.output import JsonlSink, setup_logging
 from .fetchers import HTTP_FETCHERS, BROWSER_FETCHERS
 from .fetchers.base import RetryClient
 from .models import FetchResult
-from .filters import build_filters
+from .filters import JobFilter, build_filters
 from .store import Store
 from . import digest, health, notify
 
@@ -78,21 +78,26 @@ async def fetch_all(companies: list[dict], cfg: dict) -> tuple[list[tuple[dict, 
         results = await asyncio.gather(*(one(co) for co in companies))
         return results, client.retried
 
-def notify_pending(store, global_filter, per_company, dry_run, now, hold_hours: float = 6) -> int:
+def notify_pending(store, global_filter, per_company, dry_run, now, hold_hours: float = 6,
+                   hits: JobFilter | None = None) -> int:
     """Queue messages for pending jobs that match; returns how many jobs were queued.
     A job whose title was guessed from its URL stays pending for up to hold_hours, so the
-    match/filter decision (made once) waits for the ATS to send the real title."""
+    match/filter decision (made once) waits for the ATS to send the real title.
+    Matches that also pass `hits` (config [hits]) go first, in their own 🎯 HIT message;
+    the rest go in the usual 🆕 summary, so no job is announced twice."""
     cutoff = (datetime.fromisoformat(now) - timedelta(hours=hold_hours)).isoformat()
     pending = [r for r in store.pending() if not (r["title_guessed"] and r["first_seen"] > cutoff)]
     matched, filtered = [], []
     for r in pending:
         (matched if per_company.get(r["company"], global_filter).matches(r) else filtered).append(r)
     store.mark(filtered, "filtered", now)
-    n = len(matched)
-    for rows, msg in notify.chunk(f"🆕 {n} new job{'s' * (n != 1)}",
-                                  [(r, notify.format_job(r)) for r in matched]):
-        notify.post(store, msg, rows, route="jobs", dry_run=dry_run, now=now)
-    return n
+    hit = [r for r in matched if hits and hits.matches(r)]
+    rest = [r for r in matched if not (hits and hits.matches(r))]
+    for header, rows in ((f"🎯 HIT: {len(hit)} target role{'s' * (len(hit) != 1)} (intern · new grad · entry level)", hit),
+                         (f"🆕 {len(rest)} new job{'s' * (len(rest) != 1)}", rest)):
+        for chunk_rows, msg in notify.chunk(header, [(r, notify.format_job(r)) for r in rows]):
+            notify.post(store, msg, chunk_rows, route="jobs", dry_run=dry_run, now=now)
+    return len(matched)
 
 def short_error(e: Exception) -> str:
     if isinstance(e, httpx.HTTPStatusError):
@@ -274,7 +279,8 @@ def run(args):
     digest.refilter(store, cfg, global_filter, per_company,
                     cap=dcfg.get("refilter_max", 100), dry_run=args.dry_run, now=now)
     queued = notify_pending(store, global_filter, per_company, args.dry_run, now,
-                            acfg.get("guessed_title_hold_hours", 6))
+                            acfg.get("guessed_title_hold_hours", 6),
+                            hits=JobFilter(cfg["hits"]) if cfg.get("hits") else None)
     sent = queued if args.dry_run else notify.flush(store, now)
     sink.close()
     finished = datetime.now(timezone.utc)

@@ -59,6 +59,22 @@ regions = ["US", "CA"]   # US + Canada (see geo.py); unplaceable locations ("Hyb
 locations = []           # extra substrings that also pass, e.g. ["London"]
 remote_ok = true
 
+[hits]   # a finer filter on top of [filters]: new matches that also pass it are 🎯 HITs, sent first
+# The target audience: internships/co-ops, bachelor's level, new grad / entry-level full-time.
+# Same syntax as [filters]; only title terms here, so everything else ([filters] already passed) is unchanged.
+title_include = [
+  "intern", "interns", "internship", "internships", "co-op", "coop", "apprentice", "apprenticeship",
+  "new grad", "new graduate", "new college grad", "university grad", "university graduate",
+  "early career", "early-career", "entry level", "entry-level", "junior", "bachelor", "bachelors", "bachelor's",
+  're:\b(engineer|developer|scientist|analyst)\s+I\b(?!I)',
+]
+title_exclude = [   # advanced-degree roles: still posted as regular matches, never HITs
+  "phd", "ph.d", "doctoral", "doctorate", "postdoc", "post-doc", "postdoctoral",
+  "master", "masters", "master's", "mba", 're:(?<!bs/)\bm\.?sc?\b',   # "MS/PhD", "MSc" (but "BS/MS" stays a HIT)
+  "graduate research", "graduate student", "residency", "resident",
+  "graduate intern", "graduate internship",   # Intel: "Graduate Intern" = grad students ("Undergraduate Intern" stays a HIT)
+]
+
 [digest]
 baseline_max = 50    # matching jobs sent per newly tracked company (the rest: report.py --company)
 refilter_max = 100   # after you edit [filters], open jobs that newly match are sent, up to this many
